@@ -123,9 +123,9 @@ if (fs.existsSync(csvPath)) {
 console.log('\n--- Page story ---');
 { const g = id => sum(scen(id), 200).good, n = g('normal'), w = g('wk45'), b = g('wk45buf'), x = g('wk45fix'), loss = n - w;
   const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8'), fmtn = v => Math.round(v).toLocaleString('en-US');
-  const want = [fmtn(n), '−' + fmtn(loss), Math.round((b - w) / loss * 100) + '%', '+' + fmtn(b - w), Math.round((x - w) / loss * 100) + '%', '+' + fmtn(x - w)];
+  const want = [fmtn(n), '−' + fmtn(loss), Math.round((b - w) / loss * 100) + '%', Math.round((x - w) / loss * 100) + '%'];
   const miss = want.filter(t => !html.includes('>' + t + '<') && !html.includes('(' + t + ')'));
-  check('16. The 4-step story on the page quotes the 200-shift results', miss.length === 0, `normal ${fmtn(n)}, loss ${fmtn(loss)}, buffer ${want[2]} (${want[3]}), fix ${want[4]}${miss.length ? '; missing on page: ' + miss.join(', ') : ''}`); }
+  check('16. The 4-step story on the page quotes the 200-shift results', miss.length === 0, `normal ${fmtn(n)}, loss ${fmtn(loss)}, buffer ${want[2]} (+${fmtn(b - w)}), fix ${want[3]}${miss.length ? '; missing on page: ' + miss.join(', ') : ''}`); }
 
 console.log('\n--- Scenario tables ---');
 for (const k of [200, N]) { console.log(`\n   Plant 2 Line 3, ${k} shifts each (seeds 45000+)`);

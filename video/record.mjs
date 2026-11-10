@@ -33,9 +33,9 @@ await p.addStyleTag({ content: `
   #cap .brand{display:flex;align-items:center;gap:12px;font:600 18px/1 Inter;letter-spacing:2.2px;color:#9CA3AF}
   #cap .brand i{width:18px;height:18px;border-radius:4px;background:#F06050;display:inline-block}
   #cap .stepn{display:inline-block;margin-top:30px;font:800 17px/1 Inter;letter-spacing:1.5px;color:#0B1220;background:#F06050;padding:8px 12px;border-radius:7px;text-transform:uppercase}
-  #cap h1{font:800 60px/1.04 Inter;letter-spacing:-2px;margin:16px 0 0;transition:opacity .2s}
-  #cap p{font:500 25px/1.35 Inter;color:#D1D5DB;margin:12px 0 0;max-width:960px}
-  #res{position:absolute;left:24px;right:24px;top:866px;height:330px;background:#111A2E;border-radius:18px;padding:22px 28px;box-sizing:border-box;font-family:Inter,sans-serif;color:#fff}
+  #cap h1{font:800 66px/1.04 Inter;letter-spacing:-2px;margin:16px 0 0;transition:opacity .2s}
+  #cap p{font:500 30px/1.35 Inter;color:#D1D5DB;margin:12px 0 0;max-width:960px}
+  #res{position:absolute;left:24px;right:24px;top:886px;height:316px;background:#111A2E;border-radius:18px;padding:22px 28px;box-sizing:border-box;font-family:Inter,sans-serif;color:#fff}
   #res .t{font:700 15px/1 Inter;letter-spacing:1.8px;color:#F06050;text-transform:uppercase;margin-bottom:16px}
   #res .row{display:grid;grid-template-columns:320px 1fr 150px;align-items:center;gap:14px;margin:0 0 20px;opacity:.18;transition:opacity .3s}
   #res .row.on{opacity:1}
@@ -59,13 +59,13 @@ await p.evaluate(() => {
   const lc = document.getElementById('lineCard');
   const res = el(`<div id="res"><div class="t">Good bottles per shift · 200 simulated shifts</div>
     <div class="row" data-r="0"><b>1 · Normal week</b><div class="tr"><div class="f" style="background:#64748B"></div></div><div class="v">33,090</div></div>
-    <div class="row" data-r="1"><b>2 · Week 45, labeler jams</b><div class="tr"><div class="f" style="background:#DC2626"></div></div><div class="v">−2,416</div></div>
+    <div class="row" data-r="1"><b>2 · Labeler jams</b><div class="tr"><div class="f" style="background:#DC2626"></div></div><div class="v">−2,416</div></div>
     <div class="row" data-r="2"><b>3 · + 10× conveyor</b><div class="tr"><div class="f" style="background:#D97706"></div></div><div class="v">27%<small>of loss back</small></div></div>
-    <div class="row" data-r="3"><b>4 · Fix the label stock</b><div class="tr"><div class="f" style="background:#059669"></div></div><div class="v">100%<small>of loss back</small></div></div></div>`);
+    <div class="row" data-r="3"><b>4 · Fix the labels</b><div class="tr"><div class="f" style="background:#059669"></div></div><div class="v">100%<small>of loss back</small></div></div></div>`);
   document.body.appendChild(res);
   document.body.appendChild(el(`<div id="foot"><span><b>Free</b> · runs in your browser · Plant 2 open dataset</span><span class="u">Simulate your own line →</span></div>`));
-  document.body.appendChild(el(`<div id="end"><h2>A buffer buys time.<br><em>It doesn't fix a machine that keeps stopping.</em></h2>
-    <p>Run the same test on your own line: type it in, upload your downtime log, or hand your export to the free Claude skill.</p>
+  document.body.appendChild(el(`<div id="end"><h2>More conveyor buys time.<br><em>It doesn't stop the jams.</em></h2>
+    <p>Run the same test on your own line. Free, in your browser.</p>
     <div class="cta">Try the free line simulator</div><div class="url">ivanegetov-lab.github.io/line-sim</div></div>`));
   window.__rec = {
     cap(step, h, ptxt){ document.getElementById('sn').textContent = step; document.getElementById('h1').innerHTML = h; document.getElementById('pp').innerHTML = ptxt || ''; },
@@ -87,26 +87,29 @@ const go = async id => { await p.evaluate(id => __ls.story(id), id); await p.eva
 
 // scene 0 + 1: the question, then a normal week
 await go('normal');
-await p.evaluate(() => __ls.advance(3600, 1 / 30));
-await cap('Plant 2 · Line 3 · dish soap', 'Bigger buffer, or fix the labeler?', 'New label stock is jamming the labeler. Maintenance wants more conveyor. Quality wants to fix the labels. Let’s run it.');
+// a normal-week shift with no stops in the first two hours, so 'it all flows' is what you see
+await p.evaluate(() => { const c = __ls.cfg(); let seed = 1; for (; seed < 500; seed++) { const s = new SimCore.Sim(c, seed, false); while (s.t < 7200 && s.step()) {} if (!s.events.length) break; }
+  const el = document.getElementById('seed'); el.value = seed; el.dispatchEvent(new Event('change')); });
+await p.evaluate(() => __ls.advance(1800, 1 / 30));
+await cap('Packaging line · 110 bottles a minute', 'More conveyor, or fix the jam?', 'A labeler starts jamming. Let’s run both fixes.');
 await run(3.2, 2);
-await cap('Step 1 of 4 · normal week', 'The filler sets the pace.', 'Every machine after it is a little faster, so the line just flows.');
+await cap('Step 1 of 4', 'Normal week: it all flows.', 'Green = running.');
 await run(3.2, 8, async x => bar(0, ease(x * 1.6) * frac(33090)));
 // scene 2: week 45 jam
 await go('wk45');
-await cap('Step 2 of 4 · week 45', 'The labeler jams.', 'About once a shift, for 30 minutes.');
+await cap('Step 2 of 4', 'The labeler jams.', 'Red = down.');
 await run(1.6, x => 2 + x * 4);
-await cap('Step 2 of 4 · week 45', 'The conveyor fills. The filler stops.', 'Every minute the filler is stopped is output you never get back.');
+await cap('Step 2 of 4', 'Everything before it stops.', 'Blue = blocked. <b style="color:#fff">−2,416 bottles a shift.</b>');
 await run(4.4, x => 6 + x * 14, async x => bar(1, (33090 - 2416 * ease(x * 1.5)) / MAX));
 // scene 3: big buffer
 await go('wk45buf');
-await cap('Step 3 of 4 · option A', 'Buy 10× more conveyor.', 'Now there’s room for 2,000 bottles in front of the labeler…');
+await cap('Step 3 of 4 · fix A', 'Add 10× more conveyor.', 'Room for 2,000 bottles in front of the labeler.');
 await run(1.8, 3);
-await cap('Step 3 of 4 · option A', 'By the 2nd jam it’s already full.', 'The labeler is barely faster than the filler, so a full conveyor takes hours to drain. <b style="color:#fff">27% of the loss back.</b>');
+await cap('Step 3 of 4 · fix A', 'It fills up. Then it stops too.', '<b style="color:#fff">Only 27% of the loss comes back.</b>');
 await run(4.8, x => 4 + x * 16, async x => bar(2, (30674 + 664 * ease(x * 1.5)) / MAX));
 // scene 4: fix
 await go('wk45fix');
-await cap('Step 4 of 4 · option B', 'Fix the label stock.', 'Supplier trial and incoming inspection. The line just runs. <b style="color:#fff">100% of the loss back.</b>');
+await cap('Step 4 of 4 · fix B', 'Fix the labels.', '<b style="color:#fff">100% of the loss comes back.</b>');
 await run(4.2, x => 6 + x * 14, async x => bar(3, (30674 + 2416 * ease(x * 1.5)) / MAX));
 await run(1.0, 20);
 // end card

@@ -1,8 +1,8 @@
-# Line simulator: bigger buffer, or fix the machine?
+# More conveyor, or fix the jam? A free line simulator
 
 **[▶ Try it live](https://ivanegetov-lab.github.io/line-sim/)**: free, runs in your browser, nothing to install, nothing uploaded.
 
-Every plant has this argument. A machine starts stopping, the line loses output, and one side wants more conveyor while the other wants to fix the root cause. This simulator replays the line with the stop rates from its own downtime log and shows you the answer in about 10 seconds, before anyone spends money.
+A labeler starts jamming and the line loses 2,400 bottles a shift. Do you add more conveyor, or fix the jam? Watch what each fix gets back, then run the same test on your own line.
 
 ![28-second demo: the labeler jams, 10× more conveyor gets back 27% of the loss, fixing the label stock gets back 100%](video/line-sim-demo.gif)
 
