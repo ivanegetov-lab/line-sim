@@ -1,0 +1,177 @@
+{
+ "schema": "line-sim/1",
+ "id": "plant2-line1",
+ "name": "Plant 2 · Line 1",
+ "product": "All-purpose cleaner 1 L",
+ "unit": "bottles",
+ "units_per_case": 12,
+ "shift_min": 450,
+ "ideal_rate": 100,
+ "run_speed_factor": 0.706,
+ "reject_rate": 0.0079,
+ "machines": [
+  {
+   "name": "Filler",
+   "rated_speed": 100,
+   "stops_per_hour": 0.0489826,
+   "stop_mean_min": 18.1194,
+   "stop_spread": 0.4437,
+   "data": {
+    "n_stops": 67,
+    "total_min": 1214.0,
+    "causes": [
+     "Filler faults"
+    ],
+    "stops_per_shift": 0.3454
+   }
+  },
+  {
+   "name": "Capper",
+   "rated_speed": 109,
+   "stops_per_hour": 0.0328987,
+   "stop_mean_min": 13.8,
+   "stop_spread": 0.5204,
+   "data": {
+    "n_stops": 45,
+    "total_min": 621.0,
+    "causes": [
+     "Capper faults"
+    ],
+    "stops_per_shift": 0.232
+   }
+  },
+  {
+   "name": "Labeler",
+   "rated_speed": 107,
+   "stops_per_hour": 0.017546,
+   "stop_mean_min": 8.875,
+   "stop_spread": 0.4959,
+   "data": {
+    "n_stops": 24,
+    "total_min": 213.0,
+    "causes": [
+     "Labeler jams"
+    ],
+    "stops_per_shift": 0.1237
+   }
+  },
+  {
+   "name": "Case packer",
+   "rated_speed": 114,
+   "stops_per_hour": 0.0212014,
+   "stop_mean_min": 14.5172,
+   "stop_spread": 0.5608,
+   "data": {
+    "n_stops": 29,
+    "total_min": 421.0,
+    "causes": [
+     "Case packer faults"
+    ],
+    "stops_per_shift": 0.1495
+   }
+  },
+  {
+   "name": "Palletizer",
+   "rated_speed": 123,
+   "stops_per_hour": 0,
+   "stop_mean_min": 0,
+   "stop_spread": 0,
+   "data": {
+    "n_stops": 0,
+    "total_min": 0,
+    "causes": [
+     "none logged"
+    ],
+    "stops_per_shift": 0.0
+   }
+  }
+ ],
+ "buffers": [
+  {
+   "capacity": 50
+  },
+  {
+   "capacity": 180
+  },
+  {
+   "capacity": 180
+  },
+  {
+   "capacity": 110
+  }
+ ],
+ "line_stops": [
+  {
+   "name": "Changeover",
+   "kind": "shift_start",
+   "stops_per_hour": 0.0358231,
+   "stop_mean_min": 33.102,
+   "stop_spread": 0.1525,
+   "data": {
+    "n_stops": 49,
+    "total_min": 1622.0,
+    "causes": [
+     "Changeovers"
+    ],
+    "stops_per_shift": 0.2526
+   },
+   "prob_per_shift": 0.252577
+  },
+  {
+   "name": "Other line stops",
+   "kind": "random",
+   "stops_per_hour": 0.0212014,
+   "stop_mean_min": 21.7241,
+   "stop_spread": 0.5867,
+   "data": {
+    "n_stops": 29,
+    "total_min": 630.0,
+    "causes": [
+     "Material short",
+     "Other",
+     "Waiting on maintenance"
+    ],
+    "stops_per_shift": 0.1495
+   }
+  }
+ ],
+ "conveyor_stops": {
+  "stops_per_hour": 0.0277812,
+  "stop_mean_min": 13.3947,
+  "stop_spread": 0.6529,
+  "data": {
+   "n_stops": 38,
+   "total_min": 509.0,
+   "causes": [
+    "Conveyor"
+   ],
+   "stops_per_shift": 0.1959
+  }
+ },
+ "source": {
+  "dataset": "Plant 2 open dataset by Ivan Getov (fictional plant), CC BY 4.0",
+  "line": "Line 1",
+  "period": "ISO weeks 33–45",
+  "shifts": 194,
+  "run_min": 82070.0,
+  "downtime_min": 5230.0
+ },
+ "reference": {
+  "label": "Line 1, ISO weeks 33–45",
+  "shifts": 194,
+  "good_per_shift": 29628.5,
+  "oee": 0.6584,
+  "availability": 0.9401,
+  "performance": 0.706,
+  "downtime_min_per_shift": 26.96,
+  "target_oee": 0.7
+ },
+ "assumptions": [
+  "Rated speeds follow a standard V-curve on the 100/min line rate: filler 100, capper 109, labeler 107, case packer 114, palletizer 123 per minute. Not in the dataset.",
+  "Buffer sizes (50, 180, 180, 110 bottles) are design assumptions. Not in the dataset.",
+  "Run-speed factor 70.6%: between logged stops the real line makes that share of 100/min. The log does not say where the loss sits, so every machine is slowed by the same factor.",
+  "Conveyor stops are logged against the whole conveyor system, so each one lands on one conveyor at random.",
+  "Changeovers happen at the start of a shift. Material short, Other and Waiting on maintenance with no asset stop the whole line at a random time.",
+  "The palletizer has no logged stops in 13 weeks."
+ ]
+}

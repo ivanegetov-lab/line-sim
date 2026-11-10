@@ -1,0 +1,332 @@
+
+<script id="engine">
+/* ===== Simulation engine: any serial line of 2-10 machines. No DOM. Tested by test_sim.mjs ===== */
+var SimCore = (function () {
+  'use strict';
+  var DT = 1; // seconds per step
+  var MAXM = 10;
+
+  function mulberry(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // one independent random stream per stop source, so changing a buffer
+  // does not reshuffle another machine's stops (common random numbers)
+  function stream(seed, k) {
+    var r = mulberry((Math.imul(seed ^ 0x9E3779B9, 0x85EBCA6B) + Math.imul(k + 1, 0xC2B2AE35)) >>> 0);
+    r(); r();
+    return r;
+  }
+  function expo(r, mean) { return -Math.log(1 - r()) * mean; }
+  function lognorm(r, mu, sigma) {
+    var u = 1 - r(), v = r();
+    var z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    return Math.exp(mu + sigma * z);
+  }
+  function num(v, d, lo, hi) {
+    v = typeof v === 'string' ? parseFloat(v) : v;
+    if (typeof v !== 'number' || !isFinite(v)) v = d;
+    if (lo != null && v < lo) v = lo;
+    if (hi != null && v > hi) v = hi;
+    return v;
+  }
+  function stopFields(o) {
+    // accepts stops_per_hour, or mtbs_min (mean running minutes between stops)
+    if (o.stops_per_hour == null && o.mtbs_min != null) { o.stops_per_hour = o.mtbs_min > 0 ? 60 / o.mtbs_min : 0; delete o.mtbs_min; }
+    o.stops_per_hour = num(o.stops_per_hour, 0, 0, 3600);
+    o.stop_mean_min = num(o.stop_mean_min, 0, 0, 1e5);
+    o.stop_spread = num(o.stop_spread, 0.5, 0, 3);
+  }
+  // Returns a clean copy of a config with defaults filled in. Idempotent. Unknown keys are kept.
+  function normalize(input) {
+    var c = JSON.parse(JSON.stringify(input || {})), i;
+    c.schema = 'line-sim/1';
+    c.name = String(c.name == null ? 'My line' : c.name).slice(0, 80);
+    c.product = String(c.product == null ? '' : c.product).slice(0, 80);
+    c.unit = String(c.unit || 'units').slice(0, 20);
+    c.shift_min = num(c.shift_min, 480, 10, 1440);
+    if (!Array.isArray(c.machines)) c.machines = [];
+    c.machines = c.machines.slice(0, MAXM);
+    while (c.machines.length < 2) c.machines.push({ name: 'Machine ' + (c.machines.length + 1), rated_speed: 100 });
+    c.machines.forEach(function (m, k) {
+      m.name = String(m.name == null || m.name === '' ? 'Machine ' + (k + 1) : m.name).slice(0, 40);
+      m.rated_speed = num(m.rated_speed, 100, 0.01, 1e5);
+      stopFields(m);
+    });
+    if (!Array.isArray(c.buffers)) c.buffers = [];
+    c.buffers = c.buffers.slice(0, c.machines.length - 1);
+    for (i = 0; i < c.machines.length - 1; i++) {
+      var b = c.buffers[i];
+      if (typeof b === 'number') b = { capacity: b };
+      if (!b || typeof b !== 'object') b = { capacity: Math.round(2 * c.machines[i].rated_speed) };
+      b.capacity = Math.round(num(b.capacity, 100, 1, 1e7));
+      c.buffers[i] = b;
+    }
+    var slow = Math.min.apply(null, c.machines.map(function (m) { return m.rated_speed; }));
+    c.ideal_rate = num(c.ideal_rate, slow, 0.01, 1e5);
+    c.run_speed_factor = num(c.run_speed_factor, 1, 0.05, 100);
+    if (c.run_speed_factor > 1) c.run_speed_factor = Math.min(1, c.run_speed_factor / 100); // 70.9 means 70.9%
+    c.reject_rate = num(c.reject_rate, 0, 0, 100);
+    if (c.reject_rate >= 1) c.reject_rate = Math.min(0.9, c.reject_rate / 100);
+    if (!Array.isArray(c.line_stops)) c.line_stops = [];
+    c.line_stops = c.line_stops.slice(0, 12);
+    c.line_stops.forEach(function (s, k) {
+      s.name = String(s.name == null || s.name === '' ? 'Line stop ' + (k + 1) : s.name).slice(0, 40);
+      s.kind = s.kind === 'shift_start' ? 'shift_start' : 'random';
+      stopFields(s);
+      if (s.kind === 'shift_start') s.prob_per_shift = num(s.prob_per_shift, 0, 0, 1);
+    });
+    if (c.conveyor_stops != null) {
+      if (typeof c.conveyor_stops !== 'object') delete c.conveyor_stops; else stopFields(c.conveyor_stops);
+    }
+    return c;
+  }
+  function spec(o) {
+    if (!o || !(o.stops_per_hour > 0) || !(o.stop_mean_min > 0)) return null;
+    var s = o.stop_spread || 0;
+    // lognormal with the given mean: mu = ln(mean) - sigma^2/2
+    return { mtbf: 3600 / o.stops_per_hour, mu: Math.log(o.stop_mean_min) - s * s / 2, sigma: s };
+  }
+  function pickBottleneck(wait, tol) {
+    var m = Math.min.apply(null, wait), best = 0;
+    for (var i = 0; i < wait.length; i++) if (wait[i] <= m + tol) best = i;
+    return best;
+  }
+  function zeros(n) { var a = []; for (var i = 0; i < n; i++) a.push(0); return a; }
+
+  // cfg must be normalized
+  function Sim(cfg, seed, record) {
+    var i, N = cfg.machines.length, self = this;
+    this.cfg = cfg; this.N = N;
+    this.T = Math.round(cfg.shift_min * 60);
+    this.ideal = cfg.ideal_rate;
+    this.t = 0;
+    this.record = !!record;
+    this.speed = cfg.machines.map(function (m) { return m.rated_speed * cfg.run_speed_factor / 60; }); // units per second
+    this.cap = cfg.buffers.map(function (b) { return b.capacity; });
+    this.q = cfg.reject_rate;
+    this.mSpec = cfg.machines.map(spec);
+    this.mRng = cfg.machines.map(function (m, k) { return stream(seed, k); });
+    this.cSpec = N > 1 ? spec(cfg.conveyor_stops) : null;
+    this.cRng = stream(seed, 1000);
+    this.ls = cfg.line_stops.map(function (s, k) {
+      var sp = s.kind === 'shift_start' ? (s.prob_per_shift > 0 && s.stop_mean_min > 0 ? { p: s.prob_per_shift, mu: Math.log(s.stop_mean_min) - s.stop_spread * s.stop_spread / 2, sigma: s.stop_spread } : null) : spec(s);
+      var o = { kind: s.kind, spec: sp, rng: stream(seed, 2000 + k), ttf: Infinity };
+      if (sp && s.kind === 'random') o.ttf = expo(o.rng, sp.mtbf);
+      return o;
+    });
+    this.buf = zeros(N - 1);
+    this.credit = zeros(N);
+    this.downLeft = zeros(N);
+    this.ttf = this.mSpec.map(function (s, k) { return s ? expo(self.mRng[k], s.mtbf) : Infinity; });
+    this.ttfC = this.cSpec ? expo(this.cRng, this.cSpec.mtbf) : Infinity;
+    this.convDown = -1; this.convLeft = 0;
+    this.lineLeft = 0; this.lineSrc = -1;
+    this.inCount = 0; this.outCount = 0; this.made = zeros(N);
+    this.tRun = zeros(N); this.tStarved = zeros(N); this.tBlocked = zeros(N); this.tDown = zeros(N); this.tLine = zeros(N);
+    this.events = [];
+    this.maxBuf = zeros(N - 1); this.minBuf = zeros(N - 1);
+    this.state = zeros(N);
+    if (this.record) {
+      this.g = []; this.mv = []; this.sb = [];
+      for (i = 0; i <= N; i++) this.g.push(new Uint8Array(this.T));
+      for (i = 0; i < N; i++) { this.mv.push(new Uint16Array(this.T)); this.sb.push(new Float32Array(this.T)); }
+    }
+  }
+  function dur(r, s) { return Math.max(1, Math.round(lognorm(r, s.mu, s.sigma) * 60)); }
+  // event kinds: 'm' machine i, 'c' conveyor i, 'l' line stop i
+  Sim.prototype._event = function (kind, i, d, t0) { this.events.push({ kind: kind, i: i, t0: t0 == null ? this.t : t0, dur: d }); };
+  // states: 0 running, 1 starved, 2 blocked, 3 down, 4 line stop
+  Sim.prototype.step = function () {
+    var t = this.t, i, k, N = this.N, rec = this.record, L;
+    if (t >= this.T) return false;
+    if (t === 0) { // stops that happen at the start of a shift (changeovers)
+      for (k = 0; k < this.ls.length; k++) {
+        L = this.ls[k];
+        if (L.kind === 'shift_start' && L.spec && L.rng() < L.spec.p) {
+          var d0 = dur(L.rng, L.spec);
+          this._event('l', k, d0, this.lineLeft); this.lineLeft += d0; this.lineSrc = k;
+        }
+      }
+    }
+    if (this.lineLeft > 0) { // whole line stopped: nothing moves, repairs carry on
+      for (i = 0; i < N; i++) {
+        if (this.downLeft[i] > 0) { this.downLeft[i]--; this.tDown[i]++; this.state[i] = 3; }
+        else { this.tLine[i]++; this.state[i] = 4; }
+        if (rec) this.g[i][t] = this.state[i];
+      }
+      if (this.convLeft > 0 && --this.convLeft === 0) this.convDown = -1;
+      if (rec) this.g[N][t] = 4;
+      this.lineLeft--; this.t++;
+      return true;
+    }
+    // line-level stops and conveyor stops run on the line clock
+    for (k = 0; k < this.ls.length; k++) {
+      L = this.ls[k];
+      if (L.kind !== 'random' || !L.spec) continue;
+      L.ttf -= DT;
+      if (L.ttf <= 0) {
+        var d1 = dur(L.rng, L.spec);
+        this._event('l', k, d1, t + this.lineLeft); this.lineLeft += d1; this.lineSrc = k;
+        L.ttf = expo(L.rng, L.spec.mtbf);
+      }
+    }
+    if (this.convLeft > 0) { if (--this.convLeft === 0) this.convDown = -1; }
+    else if (this.cSpec) {
+      this.ttfC -= DT;
+      if (this.ttfC <= 0) {
+        this.convDown = Math.min(N - 2, Math.floor(this.cRng() * (N - 1)));
+        this.convLeft = dur(this.cRng, this.cSpec);
+        this._event('c', this.convDown, this.convLeft); this.ttfC = expo(this.cRng, this.cSpec.mtbf);
+      }
+    }
+    if (rec) this.g[N][t] = this.convLeft > 0 ? 3 : 0;
+    // machines, downstream first so freed space is usable in the same second
+    for (i = N - 1; i >= 0; i--) {
+      if (this.downLeft[i] > 0) {
+        this.downLeft[i]--; this.tDown[i]++; this.state[i] = 3;
+        if (rec) this.g[i][t] = 3;
+        continue;
+      }
+      var sp = this.speed[i];
+      this.credit[i] += sp * DT;
+      var want = Math.floor(this.credit[i]);
+      var avail = i === 0 ? 1e12 : (this.convDown === i - 1 ? 0 : this.buf[i - 1]);
+      var space = i === N - 1 ? 1e12 : (this.convDown === i ? 0 : this.cap[i] - this.buf[i]);
+      var n = Math.min(want, avail, space);
+      if (n > 0) {
+        if (i === 0) this.inCount += n; else this.buf[i - 1] -= n;
+        if (i === N - 1) this.outCount += n; else this.buf[i] += n;
+        this.made[i] += n;
+      }
+      this.credit[i] -= want; // unused capacity is lost, not banked
+      var lost = (want - n) / sp, st = 0;
+      if (lost > 0) { if (avail <= space) this.tStarved[i] += lost; else this.tBlocked[i] += lost; }
+      // The shown state is what an operator would see. A machine faster than its feeder that still
+      // got product this second is running, paced by its feed; the idle fraction is still counted above.
+      if (n === 0 && (want >= 1 || avail === 0 || space === 0)) st = avail <= space ? 1 : 2;
+      this.tRun[i] += DT - lost;
+      this.state[i] = st;
+      if (rec) { this.g[i][t] = st; this.mv[i][t] = n; this.sb[i][t] = lost; }
+      // failures are operation-dependent: the clock runs only while the machine is working
+      if (this.mSpec[i] && !(want >= 1 && n === 0)) {
+        this.ttf[i] -= DT;
+        if (this.ttf[i] <= 0) {
+          this.downLeft[i] = dur(this.mRng[i], this.mSpec[i]);
+          this._event('m', i, this.downLeft[i]); this.ttf[i] = expo(this.mRng[i], this.mSpec[i].mtbf);
+        }
+      }
+    }
+    for (i = 0; i < N - 1; i++) {
+      if (this.buf[i] > this.maxBuf[i]) this.maxBuf[i] = this.buf[i];
+      if (this.buf[i] < this.minBuf[i]) this.minBuf[i] = this.buf[i];
+    }
+    this.t++;
+    return true;
+  };
+  Sim.prototype.results = function () {
+    var t = this.t, el = t / 60, i, k, N = this.N, nl = this.ls.length;
+    var o = {
+      mStops: zeros(N), mMin: zeros(N), mDrawn: zeros(N), lsStops: zeros(nl), lsMin: zeros(nl), lsDrawn: zeros(nl),
+      convStops: 0, convMin: 0, convDrawn: 0
+    };
+    var logged = 0;
+    for (k = 0; k < this.events.length; k++) {
+      var e = this.events[k], d = Math.max(0, Math.min(t, e.t0 + e.dur) - Math.min(t, e.t0)) / 60, full = e.dur / 60;
+      if (e.kind === 'm') { o.mStops[e.i]++; o.mMin[e.i] += d; o.mDrawn[e.i] += full; }
+      else if (e.kind === 'l') { o.lsStops[e.i]++; o.lsMin[e.i] += d; o.lsDrawn[e.i] += full; }
+      else { o.convStops++; o.convMin += d; o.convDrawn += full; }
+      logged += d;
+    }
+    logged = Math.min(logged, el);
+    var good = Math.round(this.outCount * (1 - this.q)), wip = 0, wait = [];
+    for (i = 0; i < N - 1; i++) wip += this.buf[i];
+    for (i = 0; i < N; i++) wait.push((this.tStarved[i] + this.tBlocked[i]) / 60);
+    // bottleneck = least time starved or blocked; machines within 0.5% of the
+    // shift of each other count as tied and the one furthest downstream wins
+    var best = pickBottleneck(wait, 0.005 * el), order = [];
+    for (i = 0; i < N; i++) order.push(i);
+    order.sort(function (a, b) { return (a === best ? -1 : b === best ? 1 : 0) || wait[a] - wait[b] || a - b; });
+    var toMin = function (a) { return a.map(function (v) { return v / 60; }); };
+    o.elapsedMin = el; o.inCount = this.inCount; o.out = this.outCount; o.good = good; o.rejects = this.outCount - good; o.wip = wip;
+    o.loggedMin = logged; o.nStops = this.events.length;
+    o.A = el > 0 ? 1 - logged / el : 1;
+    o.P = el - logged > 0 ? this.outCount / (this.ideal * (el - logged)) : 0;
+    o.Q = this.outCount > 0 ? good / this.outCount : 1;
+    o.OEE = el > 0 ? good / (this.ideal * el) : 0;
+    o.run = toMin(this.tRun); o.starved = toMin(this.tStarved); o.blocked = toMin(this.tBlocked);
+    o.down = toMin(this.tDown); o.line = toMin(this.tLine); o.wait = wait;
+    o.bottleneck = order[0]; o.runnerUp = order[1];
+    o.firstLost = (this.tDown[0] + this.tBlocked[0] + this.tStarved[0] + this.tLine[0]) / 60;
+    o.maxBuf = this.maxBuf.slice(); o.minBuf = this.minBuf.slice();
+    return o;
+  };
+  // bottleneck over the last `win` seconds: least time starved or blocked
+  Sim.prototype.bottleneckNow = function (win) {
+    if (!this.record || this.t < 30) return null;
+    if (this.lineLeft > 0) return { line: true };
+    var a = Math.max(0, this.t - win), w = [];
+    for (var i = 0; i < this.N; i++) {
+      var s = 0, arr = this.sb[i];
+      for (var k = a; k < this.t; k++) s += arr[k];
+      w.push(s / (this.t - a));
+    }
+    return { idx: pickBottleneck(w, 0.01), share: w };
+  };
+  Sim.prototype.rateNow = function (i, win) {
+    var a = Math.max(0, this.t - win), s = 0, arr = this.mv[i];
+    if (this.t === a) return 0;
+    for (var k = a; k < this.t; k++) s += arr[k];
+    return s / (this.t - a) * 60;
+  };
+
+  function runShift(cfg, seed) {
+    var s = new Sim(cfg, seed, false);
+    while (s.step()) { /* run */ }
+    return s.results();
+  }
+  function quantile(sorted, p) {
+    var h = (sorted.length - 1) * p, lo = Math.floor(h), hi = Math.ceil(h);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (h - lo);
+  }
+  function summarize(rs) {
+    var n = rs.length, mean = function (f) { var s = 0; for (var i = 0; i < n; i++) s += f(rs[i]); return s / n; };
+    var g = rs.map(function (r) { return r.good; }).sort(function (a, b) { return a - b; });
+    var N = rs[0].mStops.length, bn = zeros(N);
+    rs.forEach(function (r) { bn[r.bottleneck]++; });
+    var per = function (cnt, drawn, len) {
+      var stops = [], avg = [];
+      for (var i = 0; i < len; i++) {
+        var c = 0, d = 0;
+        rs.forEach(function (r) { c += len === -1 ? r[cnt] : r[cnt][i]; d += len === -1 ? r[drawn] : r[drawn][i]; });
+        stops.push(c / n); avg.push(c ? d / c : null);
+      }
+      return [stops, avg];
+    };
+    var m = per('mStops', 'mDrawn', N), l = per('lsStops', 'lsDrawn', rs[0].lsStops.length), cc = 0, cd = 0;
+    rs.forEach(function (r) { cc += r.convStops; cd += r.convDrawn; });
+    return {
+      n: n, good: mean(function (r) { return r.good; }), out: mean(function (r) { return r.out; }),
+      p10: quantile(g, 0.1), p90: quantile(g, 0.9), min: g[0], max: g[n - 1],
+      OEE: mean(function (r) { return r.OEE; }), A: mean(function (r) { return r.A; }), P: mean(function (r) { return r.P; }),
+      loggedMin: mean(function (r) { return r.loggedMin; }), firstLost: mean(function (r) { return r.firstLost; }),
+      nStops: mean(function (r) { return r.nStops; }),
+      bottleneck: bn.indexOf(Math.max.apply(null, bn)), bnShare: Math.max.apply(null, bn) / n,
+      mStops: m[0], mAvgMin: m[1], lsStops: l[0], lsAvgMin: l[1], convStops: cc / n, convAvgMin: cc ? cd / cc : null
+    };
+  }
+  function runMany(cfg, seed0, n) {
+    var rs = [];
+    for (var i = 0; i < n; i++) rs.push(runShift(cfg, seed0 + i));
+    return rs;
+  }
+  return { Sim: Sim, normalize: normalize, runShift: runShift, runMany: runMany, summarize: summarize, MAX_MACHINES: MAXM };
+})();
+if (typeof module !== 'undefined') module.exports = SimCore;
+</script>

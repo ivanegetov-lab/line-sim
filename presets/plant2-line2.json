@@ -1,0 +1,179 @@
+{
+ "schema": "line-sim/1",
+ "id": "plant2-line2",
+ "name": "Plant 2 · Line 2",
+ "product": "Fabric softener 500 ml",
+ "unit": "bottles",
+ "units_per_case": 12,
+ "shift_min": 450,
+ "ideal_rate": 140,
+ "run_speed_factor": 0.7067,
+ "reject_rate": 0.0101,
+ "machines": [
+  {
+   "name": "Filler",
+   "rated_speed": 140,
+   "stops_per_hour": 0.0264013,
+   "stop_mean_min": 14.8056,
+   "stop_spread": 0.5297,
+   "data": {
+    "n_stops": 36,
+    "total_min": 533.0,
+    "causes": [
+     "Filler faults"
+    ],
+    "stops_per_shift": 0.1846
+   }
+  },
+  {
+   "name": "Capper",
+   "rated_speed": 153,
+   "stops_per_hour": 0.0374019,
+   "stop_mean_min": 14.1373,
+   "stop_spread": 0.5616,
+   "data": {
+    "n_stops": 51,
+    "total_min": 721.0,
+    "causes": [
+     "Capper faults"
+    ],
+    "stops_per_shift": 0.2615
+   }
+  },
+  {
+   "name": "Labeler",
+   "rated_speed": 150,
+   "stops_per_hour": 0.0161342,
+   "stop_mean_min": 10.9545,
+   "stop_spread": 0.5199,
+   "data": {
+    "n_stops": 22,
+    "total_min": 241.0,
+    "causes": [
+     "Labeler jams"
+    ],
+    "stops_per_shift": 0.1128
+   }
+  },
+  {
+   "name": "Case packer",
+   "rated_speed": 159,
+   "stops_per_hour": 0.0315349,
+   "stop_mean_min": 29.5814,
+   "stop_spread": 1.016,
+   "data": {
+    "n_stops": 43,
+    "total_min": 1272.0,
+    "causes": [
+     "Case packer faults",
+     "Waiting on maintenance [CPK-2]"
+    ],
+    "stops_per_shift": 0.2205
+   }
+  },
+  {
+   "name": "Palletizer",
+   "rated_speed": 172,
+   "stops_per_hour": 0,
+   "stop_mean_min": 0,
+   "stop_spread": 0,
+   "data": {
+    "n_stops": 0,
+    "total_min": 0,
+    "causes": [
+     "none logged"
+    ],
+    "stops_per_shift": 0.0
+   }
+  }
+ ],
+ "buffers": [
+  {
+   "capacity": 80
+  },
+  {
+   "capacity": 250
+  },
+  {
+   "capacity": 250
+  },
+  {
+   "capacity": 150
+  }
+ ],
+ "line_stops": [
+  {
+   "name": "Changeover",
+   "kind": "shift_start",
+   "stops_per_hour": 0.0234679,
+   "stop_mean_min": 59.875,
+   "stop_spread": 0.3005,
+   "data": {
+    "n_stops": 32,
+    "total_min": 1916.0,
+    "causes": [
+     "Changeovers"
+    ],
+    "stops_per_shift": 0.1641
+   },
+   "prob_per_shift": 0.164103
+  },
+  {
+   "name": "Other line stops",
+   "kind": "random",
+   "stops_per_hour": 0.025668,
+   "stop_mean_min": 25.8,
+   "stop_spread": 0.7138,
+   "data": {
+    "n_stops": 35,
+    "total_min": 903.0,
+    "causes": [
+     "Material short",
+     "Other",
+     "Waiting on maintenance"
+    ],
+    "stops_per_shift": 0.1795
+   }
+  }
+ ],
+ "conveyor_stops": {
+  "stops_per_hour": 0.0220011,
+  "stop_mean_min": 11.6667,
+  "stop_spread": 0.5756,
+  "data": {
+   "n_stops": 30,
+   "total_min": 350.0,
+   "causes": [
+    "Conveyor"
+   ],
+   "stops_per_shift": 0.1538
+  }
+ },
+ "source": {
+  "dataset": "Plant 2 open dataset by Ivan Getov (fictional plant), CC BY 4.0",
+  "line": "Line 2",
+  "period": "ISO weeks 33–45",
+  "shifts": 195,
+  "run_min": 81814.0,
+  "downtime_min": 5936.0
+ },
+ "reference": {
+  "label": "Line 2, ISO weeks 33–45, FS-0500 shifts",
+  "shifts": 99,
+  "good_per_shift": 40701.5,
+  "oee": 0.6461,
+  "availability": 0.9236,
+  "performance": 0.7067,
+  "downtime_min_per_shift": 30.44,
+  "target_oee": 0.7
+ },
+ "assumptions": [
+  "Rated speeds follow a standard V-curve on the 140/min line rate: filler 140, capper 153, labeler 150, case packer 159, palletizer 172 per minute. Not in the dataset.",
+  "Buffer sizes (80, 250, 250, 150 bottles) are design assumptions. Not in the dataset.",
+  "Run-speed factor 70.7%: between logged stops the real line makes that share of 140/min. The log does not say where the loss sits, so every machine is slowed by the same factor.",
+  "Conveyor stops are logged against the whole conveyor system, so each one lands on one conveyor at random.",
+  "Changeovers happen at the start of a shift. Material short, Other and Waiting on maintenance with no asset stop the whole line at a random time.",
+  "The palletizer has no logged stops in 13 weeks.",
+  "Line 2 runs two sizes. This preset is the 500 ml size (140/min, 99 shifts); stop rates come from all Line 2 shifts."
+ ]
+}

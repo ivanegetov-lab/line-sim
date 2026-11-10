@@ -1,0 +1,312 @@
+
+<script id="app">
+(function(){
+'use strict';
+var T = LineTools, clone = T.clone;
+var COL = ['#059669','#D97706','#2563EB','#DC2626','#6B7280'];
+var TINT = ['#ECFDF5','#FFFBEB','#EFF6FF','#FEF2F2','#F3F4F6'];
+var SLABEL = ['RUNNING','STARVED','BLOCKED','DOWN','LINE STOP'];
+var $ = function(id){return document.getElementById(id);};
+var fmt = function(n){return Math.round(n).toLocaleString('en-US');};
+var pct = function(x,d){return (x*100).toFixed(d==null?1:d)+'%';};
+var esc = function(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
+var cap1 = function(s){return s.charAt(0).toUpperCase()+s.slice(1);};
+var short = function(s,n){return s.length>n ? s.slice(0,n-1)+'…' : s;};
+var store = { get:function(k){try{return localStorage.getItem(k);}catch(e){return null;}}, set:function(k,v){try{localStorage.setItem(k,v);}catch(e){}} };
+function toast(msg){ var t=$('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toast.h); toast.h=setTimeout(function(){t.classList.remove('on');},2600); }
+
+/* ---------- lines, scenarios, live config ---------- */
+var PRE = JSON.parse($('presets').textContent).map(SimCore.normalize);
+var USER = JSON.parse($('userconfig').textContent);
+var L3 = PRE.filter(function(p){return p.id==='plant2-line3';})[0] || null;
+var custom = null;          // the user's own line (edited, imported, shared or built by the skill)
+var base, scen, scIdx = 0, cfg; // base line, its what-if list, the active one, and the live config
+function isCustom(){ return base === custom; }
+function fillLineSel(){
+  var h = '';
+  if (custom) h += '<option value="custom">Your line · '+esc(short(custom.name,34))+'</option>';
+  PRE.forEach(function(p){ if (L3 && p !== L3 && p !== base && !/[?&]all=1/.test(location.search)) return; h += '<option value="'+p.id+'">'+esc(p.name)+' · '+esc(p.product)+'</option>'; });
+  $('lineSel').innerHTML = h; $('lineSel').value = isCustom() ? 'custom' : base.id;
+}
+function setLine(b, scId, keepPlay){
+  base = b; scen = T.scenariosFor(base); scIdx = 0;
+  scen.forEach(function(s,i){ if (s.id===scId) scIdx = i; });
+  cfg = scen[scIdx].cfg;
+  fillLineSel(); drawChips(); drawHero(); buildLine(); buildEditor(); buildNotes(); restart();
+  if (!keepPlay) playing = true;
+  if (v3) v3.rebuild(cfg);
+  cmp = null; drawVal(); queueCmp();
+}
+function setScenario(i){
+  scIdx = i; cfg = scen[i].cfg; drawChips(); buildLine(); buildEditor(); restart(); playing = true;
+  if (v3) v3.rebuild(cfg);
+}
+function setCustom(c, scId, keepPlay){ custom = SimCore.normalize(c); store.set('linesim.custom.v1', JSON.stringify(custom)); setLine(custom, scId, keepPlay); }
+// an edit turns the live config into the user's own line with generic what-ifs
+function editLive(fn, keepFocus){
+  var c = clone(cfg); delete c.scenarios; delete c.reference; delete c.week45; delete c.id;
+  fn(c);
+  var k = keepFocus && document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.k : null;
+  setCustom(c, null, true);
+  if (k){ var el = document.querySelector('[data-k="'+k+'"]'); if (el) el.focus(); }
+}
+function drawChips(){
+  var h = '';
+  scen.forEach(function(s,i){ h += '<button class="pchip'+(i===scIdx?' on':'')+'" data-i="'+i+'">'+esc(s.short)+'</button>'; });
+  $('scChips').innerHTML = h;
+  if (typeof drawStory === 'function') drawStory();
+}
+function drawHero(){
+  var isL3 = L3 && base === L3, U = cfg.unit;
+  $('heroEy').textContent = cfg.machines.map(function(m){return m.name;}).join(' → ');
+  $('heroH1').textContent = isL3 ? 'Bigger buffer, or fix the labeler?' : cfg.name + (cfg.product ? ' · ' + cfg.product : '');
+  $('heroSrc').textContent = base.source && base.source.dataset ? 'Data: Plant 2 open dataset (fictional plant) · speeds are design assumptions'
+    : base.source && base.source.file ? 'Your own line · stop rates from '+short(String(base.source.file),40)+' · assumptions are listed at the bottom'
+    : 'Your own line · stop rates, speeds and buffers as you entered them';
+  if (!drawHero.p0) drawHero.p0 = $('heroP').textContent;
+  $('heroP').textContent = base.source && base.source.dataset ? drawHero.p0
+    : 'Run a shift on your line with machines that stop as often and for as long as your numbers say. Then change a speed, a buffer or a stop rate and see what it is worth.';
+  $('brandRight').textContent = (cfg.name+' · '+(cfg.product? cfg.product+' · ':'')+fmtRate(cfg.ideal_rate)+' '+U+'/min').toUpperCase();
+  document.title = (isL3 ? 'Bigger buffer, or fix the labeler?' : cfg.name) + ' · line simulator';
+  Array.prototype.forEach.call(document.querySelectorAll('.u'), function(e){ e.textContent = U; });
+  Array.prototype.forEach.call(document.querySelectorAll('.U'), function(e){ e.textContent = cap1(U); });
+  $('shiftLen').textContent = cfg.shift_min;
+  $('kCasesL').textContent = cfg.units_per_case ? 'Cases packed ('+cfg.units_per_case+' per case)' : cap1(U)+' in buffers now';
+  $('kFirstL').textContent = short(cfg.machines[0].name,14)+' not producing';
+  var r = base.reference;
+  $('kOeeRef').innerHTML = r ? 'Target '+pct(r.target_oee||0.7,0)+' · actual in the data '+pct(r.oee) : 'Against '+fmtRate(cfg.ideal_rate)+' '+esc(U)+'/min nameplate';
+  $('cmpEy').textContent = 'What-if · full '+cfg.shift_min+'-minute shifts';
+  $('cmpVs').textContent = 'vs '+scen[0].short.toLowerCase();
+}
+function fmtRate(v){ return v>=100 ? fmt(v) : (+v.toFixed(v>=10?1:2)).toString(); }
+
+/* ---------- live simulation state ---------- */
+var sim, playing = true, speedX = 60, acc = 0, phase = 0, lastTs = 0, dirty = true, lastUi = 0;
+function seedVal(){ var v = parseInt($('seed').value,10); return isFinite(v)&&v>0 ? v : 1; }
+function restart(){ sim = new SimCore.Sim(cfg, seedVal(), true); acc = 0; dirty = true; lastUi = 0; }
+
+/* ---------- 2D line ---------- */
+var MW=136, CW=115, Y0=40, MH=132, RH=196, COLS=12, ROWS=2, lay = null, slotEls = [];
+function layout(){
+  var w = $('view2d').clientWidth || $('lineCard').clientWidth || 1100, N = cfg.machines.length;
+  var maxPer = window.__perRow || (w>=980?5 : w>=740?4 : w>=520?3 : 2), rows = Math.ceil(N/maxPer), per = Math.ceil(N/rows);
+  var W = rows===1 ? per*MW+(per-1)*CW : per*(MW+CW), pos = [];
+  for (var i=0;i<N;i++) pos.push({x:(i%per)*(MW+CW), y:Y0+Math.floor(i/per)*RH, last:(i%per)===per-1 && i<N-1});
+  return {per:per, rows:rows, W:W, H:rows*RH-18, pos:pos, key:N+'/'+per};
+}
+function buildLine(){
+  lay = layout();
+  var s='', i, N = cfg.machines.length, cases = false;
+  for (i=0;i<N-1;i++){
+    var p = lay.pos[i], x = p.x+MW, y = p.y, BY = y+54, BH = 30;
+    if (/case|carton|pack|box|wrap/i.test(cfg.machines[i].name)) cases = true;
+    s += '<text x="'+(x+CW/2)+'" y="'+(y+22)+'" text-anchor="middle" font-size="10.5" font-weight="600" fill="#6B7280" letter-spacing="1.1">BUFFER '+(i+1)+(p.last?' ↓':'')+'</text>';
+    s += '<text id="bt'+i+'" x="'+(x+CW/2)+'" y="'+(y+42)+'" text-anchor="middle" font-size="13" font-weight="700" fill="#111827"></text>';
+    s += '<rect id="bb'+i+'" x="'+x+'" y="'+BY+'" width="'+CW+'" height="'+BH+'" fill="#EEF0F3" stroke="#E5E7EB"/>';
+    for (var d=0; d<4; d++) s += '<circle id="fd'+i+'_'+d+'" r="2.6" cy="'+(BY+BH/2)+'" fill="#94A3B8" opacity="0"/>';
+    for (var c=0;c<COLS;c++) for (var r=0;r<ROWS;r++){
+      var cx = x+CW-7-c*9, cy = BY+9+r*12;
+      s += cases ? '<rect class="sl'+i+'" x="'+(cx-3.4)+'" y="'+(cy-3.4)+'" width="6.8" height="6.8" rx="1.2" fill="#B45309" opacity="0"/>'
+                 : '<circle class="sl'+i+'" cx="'+cx+'" cy="'+cy+'" r="3.4" fill="#0B1220" opacity="0"/>';
+    }
+    s += '<rect x="'+(x+8)+'" y="'+(BY+BH+12)+'" width="'+(CW-16)+'" height="6" rx="3" fill="#E5E7EB"/>';
+    s += '<rect id="bf'+i+'" x="'+(x+8)+'" y="'+(BY+BH+12)+'" width="0" height="6" rx="3" fill="#475569"/>';
+    s += '<text id="bp'+i+'" x="'+(x+CW/2)+'" y="'+(BY+BH+36)+'" text-anchor="middle" font-size="11" font-weight="500" fill="#6B7280"></text>';
+  }
+  for (i=0;i<N;i++){
+    var q = lay.pos[i], mx = q.x, my = q.y;
+    s += '<g class="mach" data-i="'+i+'"><title>Click to edit '+esc(cfg.machines[i].name)+'</title>';
+    s += '<g id="bn'+i+'" opacity="0"><rect x="'+(mx+8)+'" y="'+(my-30)+'" width="'+(MW-16)+'" height="21" rx="6" fill="#F06050"/><text x="'+(mx+MW/2)+'" y="'+(my-15.5)+'" text-anchor="middle" font-size="9.5" font-weight="700" fill="#fff" letter-spacing="0.8">BOTTLENECK NOW</text></g>';
+    s += '<rect id="mb'+i+'" x="'+(mx+0.75)+'" y="'+my+'" width="'+(MW-1.5)+'" height="'+MH+'" rx="12" fill="#fff" stroke="#E5E7EB" stroke-width="1.5"/>';
+    s += '<text x="'+(mx+MW/2)+'" y="'+(my+25)+'" text-anchor="middle" font-size="14" font-weight="700" fill="#111827">'+esc(short(cfg.machines[i].name,15))+'</text>';
+    s += '<rect id="mp'+i+'" x="'+(mx+22)+'" y="'+(my+36)+'" width="'+(MW-44)+'" height="21" rx="10.5" fill="#059669"/>';
+    s += '<text id="mt'+i+'" x="'+(mx+MW/2)+'" y="'+(my+50.5)+'" text-anchor="middle" font-size="10" font-weight="700" fill="#fff" letter-spacing="1.1"></text>';
+    s += '<text x="'+(mx+MW/2)+'" y="'+(my+92)+'" text-anchor="middle" fill="#111827"><tspan id="mv'+i+'" font-size="27" font-weight="800" letter-spacing="-0.6">0</tspan><tspan font-size="12" font-weight="600" fill="#6B7280" dx="3">/min</tspan></text>';
+    s += '<text id="mr'+i+'" x="'+(mx+MW/2)+'" y="'+(my+113)+'" text-anchor="middle" font-size="11" font-weight="500" fill="#6B7280"></text></g>';
+  }
+  var svg = $('lineSvg');
+  svg.setAttribute('viewBox', '0 0 '+lay.W+' '+lay.H);
+  svg.style.maxWidth = lay.rows===1 && N<5 ? (lay.W*1.05)+'px' : '';
+  svg.innerHTML = s;
+  slotEls = [];
+  for (i=0;i<N-1;i++) slotEls.push(Array.prototype.slice.call(svg.querySelectorAll('.sl'+i)));
+  $('gantt').style.height = ((N+1)*21+34)+'px';
+}
+function mmss(s){ return Math.floor(s/60)+':'+('0'+s%60).slice(-2); }
+function rateTxt(v){ return v>=20 ? String(Math.round(v)) : v.toFixed(1); }
+function drawLine(now){
+  var i, N = sim.N;
+  for (i=0;i<N;i++){
+    var st = sim.t===0 ? 0 : sim.state[i];
+    $('mb'+i).setAttribute('fill', TINT[st]); $('mb'+i).setAttribute('stroke', COL[st]);
+    $('mp'+i).setAttribute('fill', COL[st]); $('mt'+i).textContent = SLABEL[st];
+    $('mv'+i).textContent = rateTxt(st>=3 ? 0 : sim.rateNow(i, 60));
+    var sub = 'rated '+fmtRate(cfg.machines[i].rated_speed)+' · target '+rateTxt(sim.speed[i]*60);
+    if (st===3) sub = 'back in '+mmss(sim.downLeft[i]);
+    else if (st===4) sub = short(cfg.line_stops[sim.lineSrc] ? cfg.line_stops[sim.lineSrc].name.toLowerCase() : 'line stopped', 22);
+    $('mr'+i).textContent = sub;
+    $('bn'+i).setAttribute('opacity', now && !now.line && now.idx===i ? 1 : 0);
+  }
+  for (i=0;i<N-1;i++){
+    var frac = sim.buf[i]/sim.cap[i], x = lay.pos[i].x+MW, dn = sim.convDown===i;
+    $('bt'+i).textContent = fmt(sim.buf[i])+' / '+fmt(sim.cap[i]);
+    $('bf'+i).setAttribute('width', Math.max(0,(CW-16)*frac));
+    $('bf'+i).setAttribute('fill', dn ? '#DC2626' : frac>0.95 ? '#2563EB' : '#475569');
+    $('bb'+i).setAttribute('stroke', dn ? '#DC2626' : '#E5E7EB'); $('bb'+i).setAttribute('fill', dn ? '#FEF2F2' : '#EEF0F3');
+    $('bp'+i).textContent = dn ? 'conveyor down · '+mmss(sim.convLeft) : Math.round(frac*100)+'% full';
+    $('bp'+i).setAttribute('fill', dn ? '#DC2626' : '#6B7280');
+    var filled = sim.buf[i]>0 ? Math.max(1, Math.round(frac*COLS*ROWS)) : 0;
+    if (frac < 0.03 && sim.buf[i] < 4) filled = 0;
+    var els = slotEls[i];
+    for (var k=0;k<els.length;k++) els[k].setAttribute('opacity', k<filled ? 1 : 0);
+    var flowing = !dn && sim.lineLeft===0 && sim.state[i]===0 && sim.t>0 && sim.t<sim.T;
+    var pileW = Math.ceil(filled/ROWS)*9 + 6, span = CW - pileW;
+    for (var d=0; d<4; d++){
+      var el = $('fd'+i+'_'+d), pos = ((phase + d*30) % 120);
+      if (!flowing || pos > span-3 || span < 14) el.setAttribute('opacity', 0);
+      else { el.setAttribute('opacity', .9); el.setAttribute('cx', x + pos + 2); }
+    }
+  }
+}
+
+/* ---------- timeline ---------- */
+function drawGantt(){
+  var cv = $('gantt'), dpr = window.devicePixelRatio||1, W = cv.clientWidth, H = cv.clientHeight, N = sim.N;
+  if (!W) return;
+  if (cv.width !== Math.round(W*dpr) || cv.height !== Math.round(H*dpr)){ cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
+  var g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,W,H);
+  var narrow = W < 520, L = narrow ? 74 : 104, R = 8, pw = W-L-R, rh = 18, gap = 3, TT = sim.T, sm = cfg.shift_min;
+  g.font = '600 '+(narrow?11:12)+'px Inter, sans-serif'; g.textBaseline = 'middle';
+  var cnt = [0,0,0,0,0];
+  for (var r=0;r<=N;r++){
+    var y = r*(rh+gap) + (r===N?4:0);
+    g.fillStyle = '#374151'; g.textAlign = 'left'; g.fillText(r===N ? (narrow?'Line stops':'Line stops') : short(cfg.machines[r].name, narrow?10:14), 0, y+rh/2);
+    g.fillStyle = '#F3F4F6'; g.fillRect(L, y, pw, rh);
+    if (r===N && !narrow){ g.font = '500 11px Inter, sans-serif'; g.fillStyle = '#9CA3AF'; g.fillText('changeovers, conveyor jams and other whole-line stops show here', L+8, y+rh/2); g.font = '600 12px Inter, sans-serif'; }
+    var arr = sim.g[r], px = Math.ceil(sim.t/TT*pw);
+    for (var x=0;x<px;x++){
+      var a = Math.floor(x/pw*TT), b = Math.min(sim.t, Math.max(a+1, Math.floor((x+1)/pw*TT)));
+      cnt[0]=cnt[1]=cnt[2]=cnt[3]=cnt[4]=0;
+      for (var k=a;k<b;k++) cnt[arr[k]]++;
+      var best = 0; for (var c=1;c<5;c++) if (cnt[c] > cnt[best]) best = c;
+      if (r===N && best===0) continue;
+      g.fillStyle = COL[best]; g.fillRect(L+x, y, 1.05, rh);
+    }
+  }
+  var ay = (N+1)*(rh+gap)+8, stepM = sm<=120?10 : sm<=300?30 : sm<=600?60 : 120;
+  if (narrow) stepM *= 2;
+  g.font = '500 11px Inter, sans-serif'; g.textBaseline = 'top';
+  for (var m=0;m<=sm;m+=stepM){
+    var tx = L + m/sm*pw;
+    g.fillStyle = '#D1D5DB'; g.fillRect(tx, ay-4, 1, 4);
+    if (sm-m < stepM*0.6 || L+pw-tx < 62) continue; // the end label below says "<shift> min"
+    g.fillStyle = '#6B7280'; g.textAlign = m===0?'left':'center'; g.fillText(String(m), tx, ay+2);
+  }
+  g.fillStyle = '#6B7280'; g.textAlign = 'right'; g.fillText(sm+' min', L+pw, ay+2);
+  if (sim.t < TT){ var cx = L + sim.t/TT*pw; g.fillStyle = '#0B1220'; g.fillRect(cx, 0, 1.5, ay-4); }
+}
+
+/* ---------- KPIs, tables, log ---------- */
+function expectedStops(){
+  var h = cfg.shift_min/60, s = 0;
+  cfg.machines.forEach(function(m){ s += m.stop_mean_min>0 ? m.stops_per_hour*h : 0; });
+  cfg.line_stops.forEach(function(l){ s += l.stop_mean_min>0 ? (l.kind==='shift_start' ? l.prob_per_shift : l.stops_per_hour*h) : 0; });
+  if (cfg.conveyor_stops && cfg.conveyor_stops.stop_mean_min>0) s += cfg.conveyor_stops.stops_per_hour*h;
+  return s;
+}
+function evName(e){
+  if (e.kind==='m') return cfg.machines[e.i].name+' stop';
+  if (e.kind==='c') return 'Conveyor stop · '+cfg.machines[e.i].name.toLowerCase()+' → '+cfg.machines[e.i+1].name.toLowerCase();
+  return cfg.line_stops[e.i].name;
+}
+function drawKpis(now){
+  var r = sim.results(), i, N = sim.N, U = cfg.unit, M = cfg.machines;
+  $('clock').textContent = (sim.t/60).toFixed(sim.t>=sim.T?0:1);
+  $('runState').textContent = sim.t>=sim.T ? 'shift complete' : (playing ? 'running at '+speedX+'×' : 'paused');
+  $('btnPlay').textContent = sim.t>=sim.T ? 'Run again' : (playing ? 'Pause' : 'Play');
+  $('kGood').textContent = fmt(r.good);
+  $('kGoodSub').textContent = sim.t>0 ? fmtRate(r.good/r.elapsedMin)+' good '+U+'/min average · nameplate '+fmtRate(cfg.ideal_rate) : ' ';
+  $('kTotal').textContent = fmt(r.out); $('kRej').textContent = fmt(r.rejects);
+  $('kCases').textContent = cfg.units_per_case ? fmt(Math.floor(r.out/cfg.units_per_case)) : fmt(r.wip);
+  if (sim.t>0){
+    $('kOee').textContent = pct(r.OEE); $('kA').textContent = pct(r.A); $('kP').textContent = pct(r.P); $('kQ').textContent = pct(r.Q);
+    $('oeeTile').className = 'card tile '+(r.OEE>=0.70?'b-ok':r.OEE>=0.60?'b-warn':'b-risk');
+  } else { $('kOee').textContent = $('kA').textContent = $('kP').textContent = $('kQ').textContent = '–'; }
+  $('kDown').textContent = r.loggedMin.toFixed(0)+' min';
+  $('kDownSub').textContent = r.nStops ? pct(r.loggedMin/Math.max(r.elapsedMin,1e-9))+' of the shift so far' : 'No stops yet';
+  $('kStops').textContent = r.nStops;
+  var top = null, tv = 0;
+  for (i=0;i<N;i++) if (r.mMin[i]>tv){ tv = r.mMin[i]; top = M[i].name; }
+  r.lsMin.forEach(function(v,k){ if (v>tv){ tv = v; top = cfg.line_stops[k].name; } });
+  if (r.convMin>tv){ tv = r.convMin; top = 'Conveyors'; }
+  $('kTop').textContent = top ? short(top,16)+' · '+tv.toFixed(0)+' min' : '–';
+  $('kFillerLost').textContent = r.firstLost.toFixed(0)+' min';
+  if (!now){ $('kBnNow').textContent = '–'; $('kBnNowSub').textContent = ' '; }
+  else if (now.line){ $('kBnNow').textContent = 'Line stop'; $('kBnNowSub').textContent = 'Whole line is stopped'; }
+  else {
+    $('kBnNow').textContent = M[now.idx].name;
+    $('kBnNowSub').textContent = sim.state[now.idx]===3 ? 'Down: everything else is waiting on it' : 'Starved or blocked '+pct(now.share[now.idx],0)+' of the last 5 min';
+  }
+  if (sim.t>60){
+    $('kBnShift').textContent = M[r.bottleneck].name;
+    $('kBnShare').textContent = pct(r.wait[r.bottleneck]/r.elapsedMin);
+    $('kBn2').textContent = short(M[r.runnerUp].name,14)+' · '+pct(r.wait[r.runnerUp]/r.elapsedMin,0);
+  } else { $('kBnShift').textContent = $('kBnShare').textContent = $('kBn2').textContent = '–'; }
+  var h = '', tot = Math.max(r.elapsedMin, 1e-9);
+  for (i=0;i<N;i++){
+    var parts = [r.run[i], r.starved[i], r.blocked[i], r.down[i], r.line[i]], bar = '';
+    for (var k=0;k<5;k++) if (parts[k]>0) bar += '<i style="width:'+(parts[k]/tot*100).toFixed(2)+'%;background:'+COL[k]+'"></i>';
+    h += '<tr><td class="n">'+esc(M[i].name)+(sim.t>60 && r.bottleneck===i?'<span class="bn">BOTTLENECK</span>':'')+'</td><td><div class="stack">'+bar+'</div></td>'+
+      '<td class="r">'+r.run[i].toFixed(0)+'</td><td class="r">'+r.starved[i].toFixed(0)+'</td><td class="r">'+r.blocked[i].toFixed(0)+'</td><td class="r">'+r.down[i].toFixed(0)+'</td><td class="r">'+r.mStops[i]+'</td></tr>';
+  }
+  if (sim.cSpec) h += '<tr><td class="n">Conveyors</td><td class="mutx" colspan="4">Stops one conveyor: the machine before it blocks, the one after starves</td><td class="r">'+r.convMin.toFixed(0)+'</td><td class="r">'+r.convStops+'</td></tr>';
+  cfg.line_stops.forEach(function(l,k){
+    h += '<tr><td class="n">'+esc(l.name)+'</td><td class="mutx" colspan="4">'+(l.kind==='shift_start'?'At the start of the shift: every machine waits':'Whole-line stop: every machine waits')+'</td><td class="r">'+r.lsMin[k].toFixed(0)+'</td><td class="r">'+r.lsStops[k]+'</td></tr>';
+  });
+  $('stateTbl').tBodies[0].innerHTML = h;
+  var ev = sim.events, lh = '';
+  for (i=ev.length-1;i>=0;i--){
+    var e = ev[i]; if (e.t0 > sim.t) continue;
+    var open = e.t0+e.dur > sim.t;
+    lh += '<li><span class="t">'+(e.t0/60).toFixed(0)+' min</span><span>'+esc(evName(e))+'</span><span class="d" style="color:'+(open?'#DC2626':'#111827')+'">'+(open?'now · ':'')+(e.dur/60).toFixed(0)+' min</span></li>';
+  }
+  $('log').innerHTML = lh || '<li><span class="empty">No stops yet. This line averages about '+expectedStops().toFixed(1)+' stops per shift.</span></li>';
+}
+
+/* ---------- main loop ---------- */
+var view = '2d', v3 = null, v3loading = false;
+function frame(ts){
+  var dt = Math.min(0.1, (ts-lastTs)/1000 || 0); lastTs = ts;
+  var run = playing && sim.t < sim.T;
+  if (run){
+    acc += dt*speedX; var n = Math.floor(acc); acc -= n;
+    for (var i=0;i<n && sim.step();i++){}
+    phase += dt*Math.min(60, 22*Math.sqrt(speedX)); dirty = true;
+    if (sim.t >= sim.T){ playing = false; }
+  }
+  var now = (dirty || view==='3d') ? sim.bottleneckNow(300) : null;
+  if (view==='3d' && v3) v3.update(sim, cfg, {dt:dt, phase:phase, running:run, now:now});
+  if (dirty){
+    if (view==='2d') drawLine(now);
+    if (ts-lastUi > 140 || !playing){ drawKpis(now); drawGantt(); lastUi = ts; }
+    dirty = false;
+  }
+  requestAnimationFrame(frame);
+}
+function hasWebGL(){ try { var c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl'))); } catch(e){ return false; } }
+function setView(v, quiet){
+  view = v;
+  Array.prototype.forEach.call($('viewSeg').children, function(b){ b.classList.toggle('on', b.dataset.v===v); });
+  $('view2d').hidden = v!=='2d'; $('view3d').hidden = v!=='3d';
+  if (!quiet) store.set('linesim.view', v);
+  if (v==='2d'){ if (layout().key !== lay.key) buildLine(); dirty = true; return; }
+  if (v3){ v3.resize(); return; }
+  if (v3loading) return;
+  var fail = function(why){ v3loading = false; window.__v3error = String(why); toast('3D view is not available here ('+why+'). Showing the 2D view.'); setView('2d', true); };
+  if (!hasWebGL()) return fail('no WebGL');
+  if (!window.LineSim3D) return fail('3D module did not load');
+  v3loading = true;
+  window.LineSim3D.create($('view3d'), { onPick: focusMachine }).then(function(api){
+    v3 = api; v3loading = false; $('msg3d').hidden = true; v3.rebuild(cfg); dirty = true;
+  }).catch(function(e){ fail(e && e.message ? e.message.slice(0,60) : 'could not start'); });
+}

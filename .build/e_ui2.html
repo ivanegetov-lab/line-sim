@@ -1,0 +1,432 @@
+
+/* ---------- comparison ---------- */
+var cmp = null, cmpGen = 0, cmpTimer = 0;
+function queueCmp(){ clearTimeout(cmpTimer); cmpGen++; $('btnCmp').textContent = 'Run comparison'; $('btnCmp').disabled = false; cmpTimer = setTimeout(runCmp, 500); }
+function runCmp(){
+  clearTimeout(cmpTimer);
+  var gen = ++cmpGen, list = scen, n = parseInt($('reps').value,10), seed0 = seedVal(), out = [], si = 0, ri = 0, cur = [];
+  $('btnCmp').disabled = true;
+  function chunk(){
+    if (gen !== cmpGen) return;
+    var t0 = performance.now();
+    while (performance.now()-t0 < 30 && si < list.length){
+      cur.push(SimCore.runShift(list[si].cfg, seed0*1000 + ri)); ri++;
+      if (ri >= n){ out.push({sc:list[si], s:SimCore.summarize(cur)}); cur = []; ri = 0; si++; }
+    }
+    $('btnCmp').textContent = 'Running… '+Math.round((si*n+ri)/(list.length*n)*100)+'%';
+    if (si < list.length) setTimeout(chunk, 0);
+    else { cmp = {rows:out, n:n, seed:seed0, base:base}; $('btnCmp').disabled = false; $('btnCmp').textContent = 'Run comparison'; drawCmp(); drawVal(); }
+  }
+  chunk();
+}
+function drawCmp(){
+  var rows = cmp.rows, by = {}, h = '', U = cfg.unit, upc = cfg.units_per_case;
+  rows.forEach(function(r){ by[r.sc.id] = r.s; });
+  var b0 = rows[0].s, scale = 0;
+  rows.forEach(function(r){ scale = Math.max(scale, r.s.p90, r.sc.ref||0); });
+  var mag = Math.pow(10, Math.max(0, Math.floor(Math.log10(scale||1))-1));
+  scale = Math.ceil(scale*1.04/mag)*mag || 1;
+  var w = function(v){return (Math.min(v,scale)/scale*100).toFixed(2)+'%';};
+  var sgn = function(d){return d<0?'−':'+';};
+  rows.forEach(function(r, idx){
+    var s = r.s, d = s.good - b0.good;
+    var delta = idx===0 ? '<span style="color:var(--mut);font-weight:600">baseline</span>' :
+      Math.abs(d)<0.5 ? '<span style="color:var(--mut);font-weight:600">same as '+esc(rows[0].sc.short.toLowerCase())+'</span>' :
+      '<span class="'+(d<0?'neg':'pos')+'">'+sgn(d)+fmt(Math.abs(d))+'</span><small>'+sgn(d)+Math.abs(d/b0.good*100).toFixed(1)+'%'+(upc?' · '+sgn(d)+fmt(Math.abs(d)/upc)+' cases':'')+'</small>';
+    h += '<div class="crow"><div class="cl"><b>'+esc(r.sc.name)+'</b><span>'+esc(r.sc.note)+'</span></div>'+
+      '<div class="ctrack"><div class="cbar '+r.sc.color+'" style="width:'+w(s.good)+'"></div><div class="cwh" style="left:'+w(s.p10)+';width:calc('+w(s.p90)+' - '+w(s.p10)+')"></div>'+
+      (r.sc.ref ? '<div class="cmark" title="Actual average in the data: '+fmt(r.sc.ref)+'" style="left:'+w(r.sc.ref)+'"></div>' : '')+'</div>'+
+      '<div class="cm">'+fmt(s.good)+'</div><div class="cr">'+fmt(s.p10)+' – '+fmt(s.p90)+'</div><div class="cr" style="color:var(--ink)">'+pct(s.OEE)+'</div><div class="cd">'+delta+'</div></div>';
+  });
+  $('cmpRows').innerHTML = h;
+  var ins = $('insight'), txt = ''; ins.hidden = false;
+  if (by.wk45 && by.wk45buf && by.wk45dbl && by.wk45fix){
+    var loss = b0.good - by.wk45.good, gb = by.wk45buf.good - by.wk45.good, gd = by.wk45dbl.good - by.wk45.good, gf = by.wk45fix.good - by.wk45.good;
+    var share = function(g){ return loss>0 ? Math.round(g/loss*100)+'%' : '–'; };
+    var c45 = rows[1].sc.cfg, big = rows[2].sc.cfg, li = 2, lab = c45.machines[li], f = c45.run_speed_factor;
+    var fRun = c45.machines[0].rated_speed*f, lRun = lab.rated_speed*f;
+    txt = '<span class="ey">What the comparison says</span>'+
+      '<p>Week 45 costs '+fmt(loss)+' good bottles a shift ('+(loss/b0.good*100).toFixed(1)+'% of a normal shift, about '+fmt(loss/upc)+' cases). '+
+      'A 10× buffer ahead of the labeler gets back '+fmt(gb)+' of them ('+share(gb)+'). Doubling every buffer gets back '+fmt(gd)+' ('+share(gd)+'). Fixing the labeler gets back '+fmt(gf)+' ('+share(gf)+').</p>'+
+      '<p class="why">A buffer only buys time if the labeler can catch up afterwards. The week 45 labeler stop lasts '+lab.stop_mean_min.toFixed(0)+' minutes on average. The standard '+fmt(c45.buffers[1].capacity)+'-bottle conveyor fills in '+(c45.buffers[1].capacity/fRun).toFixed(1)+' minutes, then the filler blocks. A '+fmt(big.buffers[1].capacity)+'-bottle buffer rides through about '+(big.buffers[1].capacity/fRun).toFixed(0)+' minutes of a stop, but the labeler runs only '+(lRun-fRun).toFixed(1)+' bottles/min faster than the filler, so it needs about '+(big.buffers[1].capacity/(lRun-fRun)/60).toFixed(1)+' hours of clean running to empty it again, and the next stop comes after '+(1/lab.stops_per_hour).toFixed(1)+' hours on average. Often the buffer is still part full when the next jam hits. No buffer removes the extra rejects either ('+pct(c45.reject_rate,1)+' against '+pct(rows[0].sc.cfg.reject_rate,1)+').</p>';
+  } else {
+    var best = null; rows.forEach(function(r,i){ if (i>0 && r.sc.id!=='nostops' && (!best || r.s.good>best.s.good)) best = r; });
+    var ceil = by.nostops, dbl = by.dbl, fix = by.fix, parts = [];
+    if (best && best.s.good - b0.good > 0.5) parts.push('The biggest gain in this list is "'+esc(best.sc.name)+'": +'+fmt(best.s.good-b0.good)+' good '+esc(U)+' a shift (+'+((best.s.good/b0.good-1)*100).toFixed(1)+'%).');
+    else parts.push('None of these options moves the average by more than the noise.');
+    if (dbl && best && best.sc.id!=='dbl') parts.push('Doubling every buffer is worth '+sgn(dbl.good-b0.good)+fmt(Math.abs(dbl.good-b0.good))+'.');
+    if (ceil) parts.push('With no stops at all the line would make '+fmt(ceil.good)+', so stops cost '+fmt(ceil.good-b0.good)+' good '+esc(U)+' a shift ('+((1-b0.good/ceil.good)*100).toFixed(1)+'%).');
+    var bnName = cfg.machines[b0.bottleneck].name;
+    txt = '<span class="ey">What the comparison says</span><p>'+parts.join(' ')+'</p>'+
+      '<p class="why">Bottleneck in '+pct(b0.bnShare,0)+' of the simulated shifts: the '+esc(bnName)+'. Buffers only help when the machine after them can catch up, and speed only helps on the machine everyone is waiting for. Change the line below and the list reruns.</p>';
+  }
+  ins.innerHTML = txt;
+  var note = cmp.n+' simulated shifts per scenario (seeds '+(cmp.seed*1000)+'–'+(cmp.seed*1000+cmp.n-1)+'). Every scenario sees the same random stops, so the differences are down to the settings. Black whisker: 10th to 90th percentile shift.';
+  if (rows.some(function(r){return r.sc.ref;})) note += ' <span style="color:var(--accent);font-weight:700">Dashed line</span>: actual average in the data.';
+  if (base.week45) note += ' Week 45 scenarios keep every other stop source at its normal-week level so that only the labeler changes; the real week 45 logged no other machine faults but ran slower overall ('+pct(base.week45.performance)+' of rated speed against '+pct(base.run_speed_factor)+').';
+  $('cmpNote').innerHTML = note;
+}
+function drawVal(){
+  var c0 = scen[0].cfg, s = cmp && cmp.base===base ? cmp.rows[0].s : null, h = '', hrs = c0.shift_min/60, hasData = false;
+  var row = function(name, o, simStops, simAvg){
+    var d = o.data, per = d && d.stops_per_shift != null ? d.stops_per_shift : (o.kind==='shift_start' ? o.prob_per_shift : o.stops_per_hour*hrs);
+    if (d && d.n_stops != null) hasData = true;
+    var on = o.stop_mean_min>0 && per>0;
+    h += '<tr><td><b style="font-weight:600">'+esc(name)+'</b>'+(d && d.causes ? ' <span class="mutx">· '+esc(d.causes.join(', '))+'</span>' : '')+'</td><td class="r">'+(d && d.n_stops!=null ? d.n_stops : '–')+'</td><td class="r">'+(on?per.toFixed(3):'0')+'</td><td class="r">'+(s?simStops.toFixed(3):'…')+'</td>'+
+      '<td class="r">'+(on?o.stop_mean_min.toFixed(1):'–')+'</td><td class="r">'+(s ? (simAvg!=null?simAvg.toFixed(1):'–') : '…')+'</td></tr>';
+  };
+  c0.machines.forEach(function(m,i){ row(m.name, m, s?s.mStops[i]:0, s?s.mAvgMin[i]:null); });
+  if (c0.conveyor_stops) row('Conveyors', c0.conveyor_stops, s?s.convStops:0, s?s.convAvgMin:null);
+  c0.line_stops.forEach(function(l,i){ row(l.name, l, s?s.lsStops[i]:0, s?s.lsAvgMin[i]:null); });
+  $('valTbl').tBodies[0].innerHTML = h;
+  $('valH1').innerHTML = hasData ? 'Stops in data' : 'Stops in data';
+  $('valH2').innerHTML = hasData ? 'Stops / shift<br>data' : 'Stops / shift<br>as set up';
+  var r = base.reference, U = c0.unit;
+  $('valNote').innerHTML = !s ? 'Running the comparison…' :
+    esc(scen[0].name)+', '+cmp.n+' simulated shifts'+(r ? ' against '+r.shifts+' real ones ('+esc(r.label)+'): '+fmt(s.good)+' good '+U+' per shift simulated, '+fmt(r.good_per_shift)+' in the data. Logged downtime '+s.loggedMin.toFixed(1)+' min per shift simulated, '+r.downtime_min_per_shift.toFixed(1)+' in the data. OEE '+pct(s.OEE)+' simulated, '+pct(r.oee)+' in the data.' : ': '+fmt(s.good)+' good '+esc(U)+' per shift, OEE '+pct(s.OEE)+', '+s.loggedMin.toFixed(1)+' logged stop minutes per shift.')+' With stops this rare, 30 shifts is a small sample: use 200 or 1,000 to compare stop rates.';
+}
+function buildNotes(){
+  var items = (base.assumptions||[]).concat(base.notes||[]).map(esc);
+  if (!base.assumptions || !base.assumptions.length) items.push('<b>Your numbers.</b> Speeds, buffers and stop rates are whatever you entered or imported. Anything you did not measure is an assumption: note it before you share the result.');
+  items = items.concat([
+    '<b>Stops.</b> Time between stops is exponential and the clock only runs while the machine is working. Stop length is lognormal with the average and spread you set.',
+    '<b>Run-speed factor.</b> The share of rated speed the line really makes between logged stops (short stops and slow running that never reach the downtime log). It slows every machine by the same factor. 100% means nameplate.',
+    '<b>Buffers</b> hold product and have no travel time. Machines hold none themselves. The shift starts with an empty line.',
+    '<b>Bottleneck.</b> The machine with the least time starved or blocked; near-ties go to the one furthest downstream. A machine that keeps failing shows up as the bottleneck.',
+    '<b>OEE</b> = good units ÷ (nameplate rate × planned minutes). Rejects are a fixed share of units made.',
+    '<b>Engine.</b> One-second time steps, whole units, one random stream per stop source. Same seed, same shift. Every unit that enters is either out of the line or in a buffer.'
+  ]);
+  $('notes').innerHTML = items.map(function(t){return '<li>'+t+'</li>';}).join('');
+}
+
+/* ---------- editor ---------- */
+function fld(label, k, t, val, extra){ return '<div class="fld '+(extra||'')+'"><label title="'+label+'">'+label+'</label><input data-k="'+k+'" data-t="'+t+'" value="'+esc(val)+'" '+(t==='str'?'type="text"':'type="number" step="any" min="0"')+'></div>'; }
+function mtbs(o){ return o.stops_per_hour>0 ? +(60/o.stops_per_hour).toPrecision(5) : ''; }
+function resTxt(o, shiftStart){
+  if (!(o.stop_mean_min>0)) return 'Never stops';
+  if (shiftStart) return o.prob_per_shift>0 ? 'In '+pct(o.prob_per_shift,0)+' of shifts · '+(o.prob_per_shift*o.stop_mean_min).toFixed(1)+' min lost per shift' : 'Never stops';
+  if (!(o.stops_per_hour>0)) return 'Never stops';
+  var per = o.stops_per_hour*cfg.shift_min/60;
+  return '≈ '+per.toFixed(2)+' stops per shift · '+(per*o.stop_mean_min).toFixed(1)+' min lost';
+}
+function buildEditor(){
+  var c = cfg, h = '', i;
+  $('lineFields').innerHTML = fld('Line name','name','str',c.name,'w2')+fld('Product','product','str',c.product,'w2')+fld('Unit','unit','str',c.unit)+
+    fld('Shift min','shift_min','num',c.shift_min)+fld('Nameplate /min','ideal_rate','num',c.ideal_rate)+
+    fld('Run speed %','run_speed_factor','pct',+(c.run_speed_factor*100).toFixed(2))+fld('Rejects %','reject_rate','pct',+(c.reject_rate*100).toFixed(3));
+  c.machines.forEach(function(m, i){
+    var p = 'machines.'+i+'.';
+    h += '<div class="mrow" data-i="'+i+'"><div class="ord"><span class="idx">'+(i+1)+'</span><button data-act="up" data-i="'+i+'" title="Move up"'+(i===0?' disabled':'')+'>▲</button><button data-act="down" data-i="'+i+'" title="Move down"'+(i===c.machines.length-1?' disabled':'')+'>▼</button></div>'+
+      '<button class="del" data-act="del" data-i="'+i+'" title="Remove machine"'+(c.machines.length<=2?' disabled':'')+'>✕</button>'+
+      fld('Machine','machines.'+i+'.name','str',m.name,'nm')+fld('Rated speed /min',p+'rated_speed','num',m.rated_speed)+fld('Stop every (min)',p+'stops_per_hour','mtbs',mtbs(m))+
+      fld('Avg stop min',p+'stop_mean_min','num',m.stop_mean_min||'')+fld('Spread',p+'stop_spread','num',m.stop_spread)+
+      '<div class="res">Runs at '+fmtRate(m.rated_speed*c.run_speed_factor)+'/min<br>'+resTxt(m)+'</div></div>';
+    if (i < c.machines.length-1) h += '<div class="brow">Conveyor buffer '+(i+1)+' holds <input type="number" min="1" step="1" data-k="buffers.'+i+'.capacity" data-t="int" value="'+c.buffers[i].capacity+'"> '+esc(c.unit)+' <span class="mutx">≈ '+(c.buffers[i].capacity/(m.rated_speed*c.run_speed_factor)).toFixed(1)+' min of '+esc(m.name.toLowerCase())+' output</span></div>';
+  });
+  $('mList').innerHTML = h;
+  $('btnAddM').disabled = c.machines.length >= SimCore.MAX_MACHINES;
+  h = '';
+  var cv = c.conveyor_stops || {stops_per_hour:0, stop_mean_min:0, stop_spread:0.5};
+  h += '<div class="mrow lsrow"><span class="sp"></span>'+'<div class="fld nm"><label>Stop</label><input value="Conveyors" disabled></div><div class="fld"><label>When</label><select disabled><option>One conveyor at random</option></select></div>'+
+    fld('Stop every (min)','conveyor_stops.stops_per_hour','mtbs',mtbs(cv))+fld('Avg stop min','conveyor_stops.stop_mean_min','num',cv.stop_mean_min||'')+fld('Spread','conveyor_stops.stop_spread','num',cv.stop_spread)+
+    '<div class="res">'+resTxt(cv)+'</div></div>';
+  c.line_stops.forEach(function(l, i){
+    var p = 'line_stops.'+i+'.', st = l.kind==='shift_start';
+    h += '<div class="mrow lsrow" style="margin-top:8px"><button class="del" data-act="delLs" data-i="'+i+'" title="Remove">✕</button>'+fld('Stop',p+'name','str',l.name,'nm')+
+      '<div class="fld"><label>When</label><select data-k="'+p+'kind" data-t="kind"><option value="random"'+(st?'':' selected')+'>Random time</option><option value="shift_start"'+(st?' selected':'')+'>At shift start</option></select></div>'+
+      (st ? fld('% of shifts',p+'prob_per_shift','pct',+(l.prob_per_shift*100).toFixed(2)) : fld('Stop every (min)',p+'stops_per_hour','mtbs',mtbs(l)))+
+      fld('Avg stop min',p+'stop_mean_min','num',l.stop_mean_min||'')+fld('Spread',p+'stop_spread','num',l.stop_spread)+'<div class="res">'+resTxt(l, st)+'</div></div>';
+  });
+  $('lsList').innerHTML = h;
+  $('btnResetLine').disabled = !isCustom() && scIdx===0;
+}
+function onEdit(e){
+  var el = e.target, k = el.dataset.k, t = el.dataset.t; if (!k) return;
+  var v = el.value, set = {};
+  if (t==='str'){ if (!v.trim()) { buildEditor(); return; } v = v.trim(); }
+  else if (t==='kind'){ /* as is */ }
+  else {
+    var n = parseFloat(v);
+    if (v==='' && /stop_mean_min$/.test(k)) n = 0;
+    if (t==='mtbs') v = isFinite(n) && n>0 ? 60/n : 0;
+    else if (!isFinite(n) || n<0){ buildEditor(); return; }
+    else if (t==='pct') v = n/100;
+    else if (t==='int') v = Math.max(1, Math.round(n));
+    else v = n;
+  }
+  set[k] = v;
+  editLive(function(c){
+    if (k.indexOf('conveyor_stops.')===0 && !c.conveyor_stops) c.conveyor_stops = {stops_per_hour:0, stop_mean_min:0, stop_spread:0.5};
+    if (t==='kind'){ var ls = c.line_stops[+k.split('.')[1]]; ls.kind = v; if (v==='shift_start' && !(ls.prob_per_shift>0)) ls.prob_per_shift = Math.min(1, ls.stops_per_hour*c.shift_min/60) || 0.2; if (v==='random' && !(ls.stops_per_hour>0)) ls.stops_per_hour = (ls.prob_per_shift||0.2)/(c.shift_min/60); return; }
+    var parts = k.split('.'), o = c;
+    for (var i=0;i<parts.length-1;i++) o = o[/^\d+$/.test(parts[i]) ? +parts[i] : parts[i]];
+    o[parts[parts.length-1]] = v;
+    if (k==='run_speed_factor') c.run_speed_factor = Math.min(1, Math.max(0.05, v));
+    if (k==='reject_rate') c.reject_rate = Math.min(0.9, v);
+  }, true);
+}
+function onEditClick(e){
+  var b = e.target.closest('[data-act]'); if (!b) return;
+  var a = b.dataset.act, i = +b.dataset.i;
+  editLive(function(c){
+    var M = c.machines, B = c.buffers;
+    if (a==='up' && i>0){ M.splice(i-1, 0, M.splice(i,1)[0]); }
+    else if (a==='down' && i<M.length-1){ M.splice(i+1, 0, M.splice(i,1)[0]); }
+    else if (a==='del' && M.length>2){ M.splice(i,1); B.splice(Math.min(i, B.length-1),1); }
+    else if (a==='delLs'){ c.line_stops.splice(i,1); }
+  });
+}
+function focusMachine(i){
+  $('editor').scrollIntoView({behavior:'smooth', block:'start'});
+  setTimeout(function(){
+    var rows = document.querySelectorAll('#mList .mrow'), r = rows[i]; if (!r) return;
+    Array.prototype.forEach.call(rows, function(x){ x.classList.remove('hl'); });
+    r.classList.add('hl'); var inp = r.querySelector('input[data-k$="rated_speed"]'); if (inp){ inp.focus({preventScroll:true}); inp.select(); }
+    setTimeout(function(){ r.classList.remove('hl'); }, 2500);
+  }, 350);
+}
+
+/* ---------- share, import, export ---------- */
+function shareUrl(){
+  var h = isCustom() ? 'c='+T.encodeShare(base) : 'line='+base.id;
+  if (scIdx>0) h += '&sc='+encodeURIComponent(scen[scIdx].id);
+  h += '&seed='+seedVal();
+  return location.href.split('#')[0].split('?')[0]+'#'+h;
+}
+function copyShare(){
+  var u = shareUrl(), ok = function(){ toast('Share link copied. Anyone who opens it sees this exact line.'); };
+  try { history.replaceState(null, '', u); } catch(e){}
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(ok, function(){ prompt('Copy this link', u); });
+  else prompt('Copy this link', u);
+}
+function exportJSON(){ return JSON.stringify(base, null, 1)+'\n'; }
+function download(name, blob){ var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+function importJSON(text){
+  var c; try { c = JSON.parse(text); } catch(e){ toast('That file is not valid JSON.'); return false; }
+  if (!c || !Array.isArray(c.machines) || c.machines.length<2){ toast('No line found in that file: it needs a "machines" list with at least 2 machines.'); return false; }
+  setCustom(c); toast('Line loaded: '+custom.name); return true;
+}
+function slug(s){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'line'; }
+
+/* ---------- CSV import ---------- */
+var csv = { data:null, d:null, map:{} };
+function opt(list, sel, none){ return (none!=null?'<option value="">'+none+'</option>':'')+list.map(function(v){ return '<option value="'+esc(v)+'"'+(v===sel?' selected':'')+'>'+esc(v===''?'(blank)':v)+'</option>'; }).join(''); }
+function guessCol(header, re){ for (var i=0;i<header.length;i++) if (re.test(header[i])) return header[i]; return ''; }
+function csvLoad(text){
+  var d = T.parseCSV(text);
+  if (!d.header.length || !d.rows.length){ toast('No rows found in that file.'); return; }
+  csv.data = d; csv.map = {};
+  var H = d.header;
+  var numCols = H.filter(function(h){ var ok = 0; d.rows.slice(0,50).forEach(function(r){ if (isFinite(parseFloat(r[h]))) ok++; }); return ok >= Math.min(d.rows.length,50)*0.8; });
+  // cause column: of the likely columns take the one with the fewest blank cells; "cause"/"reason" wins a tie
+  var cands = H.filter(function(h){ return /cause|reason/i.test(h); }).concat(H.filter(function(h){ return /machine|asset|equipment|station/i.test(h) && !/cause|reason/i.test(h); }));
+  var blanks = function(h){ var b = 0; d.rows.forEach(function(r){ if (r[h]==='') b++; }); return b; };
+  var cause = cands.sort(function(a,b){ return blanks(a)-blanks(b); })[0] || H[0];
+  var mins = guessCol(numCols, /min|dur|length|time/i) || numCols[0] || H[0];
+  var date = guessCol(H, /^date$|date|day/i), shift = guessCol(H, /shift/i), fcol = guessCol(H, /^line$|line/i);
+  $('cCause').innerHTML = opt(H, cause); $('cMin').innerHTML = opt(H, mins);
+  $('cDate').innerHTML = opt(H, date, '(none)'); $('cShift').innerHTML = opt(H, shift, '(none)');
+  $('cFcol').innerHTML = opt(H, '', '(all rows)');
+  if (fcol){ var vals = {}; d.rows.forEach(function(r){ vals[r[fcol]] = 1; }); if (Object.keys(vals).length>1 && Object.keys(vals).length<50) $('cFcol').value = fcol; }
+  $('cFrom').value = $('cTo').value = ''; $('cShifts').value = ''; $('cShiftMin').value = cfg.shift_min;
+  csvFvals(); $('csvMap').hidden = false; csvCompute(true);
+}
+function csvFvals(){
+  var col = $('cFcol').value, vals = {};
+  if (col) csv.data.rows.forEach(function(r){ vals[r[col]] = (vals[r[col]]||0)+1; });
+  var list = Object.keys(vals).sort(function(a,b){ return vals[b]-vals[a]; });
+  var nm = base.name.toLowerCase(), pick = list.filter(function(v){ return v && nm.indexOf(v.toLowerCase())>=0; })[0] || list[0]; // "Line 3" if the open line is "Plant 2 · Line 3"
+  $('cFval').innerHTML = opt(list, pick); $('cFval').disabled = !col;
+}
+var TARGETS_FIXED = [['line','Whole-line stop, random time'],['start','Whole-line stop, at shift start'],['conv','Conveyors'],['new','Add as a new machine'],['ignore','Leave out']];
+function csvCompute(reguess){
+  var o = { causeCol:$('cCause').value, minutesCol:$('cMin').value, dateCol:$('cDate').value, shiftCol:$('cShift').value,
+    filterCol:$('cFcol').value, filterVal:$('cFval').value, from:$('cFrom').value, to:$('cTo').value,
+    shifts:parseFloat($('cShifts').value)||0, shiftMin:parseFloat($('cShiftMin').value)||cfg.shift_min };
+  var d = csv.d = T.deriveStops(csv.data.rows, o), names = cfg.machines.map(function(m){return m.name;});
+  csv.opts = o;
+  if (!$('cShifts').value && d.shiftsSeen) $('cShifts').placeholder = d.shiftsSeen;
+  $('cSum').textContent = fmt(d.rows)+' rows · '+fmt(d.totalDown)+' downtime min · '+fmt(d.shifts)+' shifts × '+o.shiftMin+' min → '+fmt(Math.max(0,d.runMin))+' running min';
+  var warn = '';
+  if (!(o.shifts>0)) warn = d.shiftsSeen ? 'Shifts covered is not filled in, so it is counted from the file: '+d.shiftsSeen+' shifts have at least one stop. Shifts with no stops are missing from that count, which makes stop rates look worse than they are. Enter the real number of production shifts.' : 'Enter how many production shifts this file covers. Without it the stop rates cannot be worked out.';
+  if (d.runMin<=0 && d.shifts>0) warn = 'Downtime is longer than the planned time: check the shifts covered, the shift length and the minutes column.';
+  $('cWarn').hidden = !warn; $('cWarn').textContent = warn;
+  var h = '', causes = d.causes.slice().sort(function(a,b){ return d.byCause[b].length - d.byCause[a].length; });
+  causes.forEach(function(c){
+    if (reguess || csv.map[c]==null) csv.map[c] = T.guessTarget(c, names);
+    var mins = d.byCause[c], sum = 0; mins.forEach(function(m){ sum += m; });
+    var sel = '<select data-cause="'+esc(c)+'">'+names.map(function(n,i){ return '<option value="m'+i+'"'+(csv.map[c]==='m'+i?' selected':'')+'>Machine: '+esc(n)+'</option>'; }).join('')+
+      TARGETS_FIXED.map(function(t){ return '<option value="'+t[0]+'"'+(csv.map[c]===t[0]?' selected':'')+'>'+t[1]+'</option>'; }).join('')+'</select>';
+    h += '<tr><td class="n">'+esc(c===''?'(blank)':short(c,44))+'</td><td class="r">'+mins.length+'</td><td class="r">'+fmt(sum)+'</td><td style="padding-left:14px">'+sel+'</td></tr>';
+  });
+  $('cTbl').tBodies[0].innerHTML = h || '<tr><td colspan="4" class="mutx">No rows with minutes above zero.</td></tr>';
+  csvResult();
+}
+function csvPlan(){
+  var d = csv.d, names = cfg.machines.map(function(m){return m.name;}), groups = {}, plan = { machines:[], added:[], line:null, start:null, conv:null };
+  d.causes.forEach(function(c){ var t = csv.map[c]; if (t==='ignore') return; if (t==='new') t = 'new:'+c; (groups[t] = groups[t]||[]).push(c); });
+  names.forEach(function(n,i){ var cs = groups['m'+i]||[]; plan.machines.push({name:n, causes:cs, st:d.stats(cs)}); });
+  Object.keys(groups).forEach(function(k){ if (k.indexOf('new:')===0) plan.added.push({name:short(k.slice(4)||'New machine',40), causes:groups[k], st:d.stats(groups[k])}); });
+  if (groups.line) plan.line = {name:'Line stops', causes:groups.line, st:d.stats(groups.line)};
+  if (groups.start) plan.start = {name:'Changeover', causes:groups.start, st:d.stats(groups.start)};
+  if (groups.conv) plan.conv = {name:'Conveyors', causes:groups.conv, st:d.stats(groups.conv)};
+  return plan;
+}
+function csvResult(){
+  var p = csvPlan(), h = '', ok = csv.d.runMin>0 && csv.d.shifts>0;
+  var row = function(x, extra){ var s = x.st; h += '<tr><td class="n">'+esc(x.name)+(extra?' <span class="mutx">'+extra+'</span>':'')+'</td><td class="r">'+s.n_stops+'</td><td class="r">'+(s.stops_per_hour?fmt(60/s.stops_per_hour):'–')+'</td><td class="r">'+(s.n_stops?s.stop_mean_min.toFixed(1):'–')+'</td><td class="r">'+(s.n_stops?s.stop_spread.toFixed(2):'–')+'</td></tr>'; };
+  p.machines.forEach(function(x){ row(x, x.st.n_stops?'':'· no stops in the file'); });
+  p.added.forEach(function(x){ row(x, '· new machine, add its speed afterwards'); });
+  if (p.conv) row(p.conv); if (p.start) row(p.start, '· in '+pct(Math.min(1,p.start.st.n_stops/csv.d.shifts),0)+' of shifts'); if (p.line) row(p.line);
+  $('cRes').tBodies[0].innerHTML = ok ? h : '<tr><td colspan="5" class="mutx">Fill in the shifts covered to see the result.</td></tr>';
+  $('csvApply').disabled = !ok;
+  return p;
+}
+function csvApply(){
+  var p = csvPlan(), d = csv.d, f = function(st){ return {stops_per_hour:st.stops_per_hour, stop_mean_min:st.stop_mean_min, stop_spread:st.stop_spread}; };
+  var dat = function(x){ return {n_stops:x.st.n_stops, total_min:x.st.total_min, causes:x.causes, stops_per_shift:+(x.st.n_stops/d.shifts).toFixed(4)}; };
+  editLive(function(c){
+    p.machines.forEach(function(x,i){ Object.assign(c.machines[i], f(x.st)); c.machines[i].data = dat(x); });
+    p.added.forEach(function(x){
+      if (c.machines.length >= SimCore.MAX_MACHINES) return;
+      var last = c.machines[c.machines.length-1];
+      c.buffers.push({capacity:Math.round(2*last.rated_speed)});
+      c.machines.push(Object.assign({name:x.name, rated_speed:+(last.rated_speed*1.05).toFixed(1), data:dat(x)}, f(x.st)));
+    });
+    c.line_stops = [];
+    if (p.start) c.line_stops.push(Object.assign({name:p.start.name, kind:'shift_start', prob_per_shift:T.sig(Math.min(1,p.start.st.n_stops/d.shifts)), data:dat(p.start)}, f(p.start.st)));
+    if (p.line) c.line_stops.push(Object.assign({name:p.line.name, kind:'random', data:dat(p.line)}, f(p.line.st)));
+    if (p.conv) c.conveyor_stops = Object.assign({data:dat(p.conv)}, f(p.conv.st)); else delete c.conveyor_stops;
+    c.shift_min = csv.opts.shiftMin;
+    c.source = {file:csv.fileName||'downtime.csv', rows:d.rows, shifts:d.shifts, run_min:Math.round(d.runMin*10)/10, downtime_min:Math.round(d.totalDown*10)/10};
+    c.assumptions = ['Stop rates come from '+(csv.fileName||'the imported file')+': '+fmt(d.rows)+' rows over '+fmt(d.shifts)+' shifts. Rated speeds, buffer sizes, the run-speed factor and the reject rate are whatever is entered in "Build your line": check them.'];
+  });
+  $('csvDlg').close(); toast('Stop rates applied from '+(csv.fileName||'the file')+'. Now check speeds and buffers.');
+  $('editor').scrollIntoView({behavior:'smooth'});
+}
+
+/* ---------- start-up and wiring ---------- */
+function parseHash(){ var o = {}; location.hash.replace(/^#/, '').split('&').forEach(function(p){ var i = p.indexOf('='); if (i>0) o[p.slice(0,i)] = decodeURIComponent(p.slice(i+1)); }); return o; }
+(function start(){
+  var qs = new URLSearchParams(location.search), h = parseHash(), saved = store.get('linesim.custom.v1'), first = null, sc = h.sc || qs.get('sc') || qs.get('preset');
+  if (saved){ try { custom = SimCore.normalize(JSON.parse(saved)); } catch(e){} }
+  if (USER){ custom = SimCore.normalize(USER); first = custom; }
+  if (h.c){ try { custom = T.decodeShare(h.c); first = custom; } catch(e){ toast('That share link could not be read.'); } }
+  if (!first && (h.line || qs.get('line'))) first = PRE.filter(function(p){ return p.id===(h.line||qs.get('line')); })[0];
+  if (!first) first = L3 || PRE[0] || (custom = SimCore.normalize({}));
+  if (h.seed || qs.get('seed')) $('seed').value = h.seed || qs.get('seed');
+  if (qs.get('reps')) $('reps').value = qs.get('reps');
+  if (qs.get('x')){ speedX = +qs.get('x'); Array.prototype.forEach.call($('speedSeg').children, function(b){ b.classList.toggle('on', +b.dataset.x===speedX); }); }
+  setLine(first, sc);
+  if (qs.get('t')){ var tt = Math.min(sim.T, parseFloat(qs.get('t'))*60); while (sim.t < tt && sim.step()){} playing = qs.get('play')==='1'; }
+  var pref = qs.get('view') || store.get('linesim.view');
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.addEventListener('DOMContentLoaded', function(){ if (pref==='3d' || (!pref && !reduce && hasWebGL() && window.LineSim3D)) setView('3d', true); });
+})();
+$('lineSel').addEventListener('change', function(){ var v = this.value; setLine(v==='custom' ? custom : PRE.filter(function(p){return p.id===v;})[0]); });
+$('scChips').addEventListener('click', function(e){ var i = e.target.dataset && e.target.dataset.i; if (i!=null) setScenario(+i); });
+$('btnPlay').addEventListener('click', function(){ if (sim.t>=sim.T){ restart(); playing = true; } else playing = !playing; dirty = true; });
+$('speedSeg').addEventListener('click', function(e){ var x = e.target.dataset && e.target.dataset.x; if (!x) return; speedX = +x;
+  Array.prototype.forEach.call(this.children, function(b){ b.classList.toggle('on', b===e.target); }); dirty = true; });
+$('viewSeg').addEventListener('click', function(e){ var v = e.target.dataset && e.target.dataset.v; if (v) setView(v); });
+$('btnFinish').addEventListener('click', function(){ if (sim.t>=sim.T) restart(); while (sim.step()){} playing = false; dirty = true; });
+$('btnReset').addEventListener('click', function(){ restart(); playing = false; });
+$('btnNewSeed').addEventListener('click', function(){ $('seed').value = seedVal()+1; restart(); playing = true; });
+$('seed').addEventListener('change', function(){ $('seed').value = seedVal(); restart(); });
+$('btnCmp').addEventListener('click', runCmp);
+$('reps').addEventListener('change', runCmp);
+$('lineSvg').addEventListener('click', function(e){ var m = e.target.closest('.mach'); if (m) focusMachine(+m.dataset.i); });
+$('btnEdit').addEventListener('click', function(){ $('editor').scrollIntoView({behavior:'smooth'}); });
+$('btnShare').addEventListener('click', copyShare); $('btnShare2').addEventListener('click', copyShare);
+$('editor').addEventListener('change', onEdit);
+$('editor').addEventListener('click', onEditClick);
+$('btnAddM').addEventListener('click', function(){ editLive(function(c){ var last = c.machines[c.machines.length-1]; c.buffers.push({capacity:Math.round(2*last.rated_speed)}); c.machines.push({name:'Machine '+(c.machines.length+1), rated_speed:+(last.rated_speed*1.05).toFixed(1), stops_per_hour:0, stop_mean_min:0, stop_spread:0.5}); }); });
+$('btnAddLs').addEventListener('click', function(){ editLive(function(c){ c.line_stops.push({name:'Line stop '+(c.line_stops.length+1), kind:'random', stops_per_hour:60/c.shift_min/4, stop_mean_min:15, stop_spread:0.5}); }); });
+$('btnExport').addEventListener('click', function(){ download(slug(base.name)+'.json', new Blob([exportJSON()], {type:'application/json'})); });
+$('btnImport').addEventListener('click', function(){ $('fileJson').click(); });
+$('fileJson').addEventListener('change', function(){ var f = this.files[0]; if (!f) return; f.text().then(importJSON); this.value = ''; });
+$('btnResetLine').addEventListener('click', function(){ setLine(L3 || PRE[0]); toast('Back to '+base.name+'. Your own line is still in the list.'); });
+$('btnCsv').addEventListener('click', function(){ $('csvDlg').showModal(); });
+$('csvClose').addEventListener('click', function(){ $('csvDlg').close(); });
+$('csvFile').addEventListener('change', function(){ var f = this.files[0]; if (!f) return; csv.fileName = f.name; f.text().then(csvLoad); });
+$('csvMap').addEventListener('change', function(e){
+  if (e.target.dataset.cause != null){ csv.map[e.target.dataset.cause] = e.target.value; csvResult(); return; }
+  if (e.target.id==='cFcol') csvFvals();
+  csvCompute(e.target.id==='cCause');
+});
+$('csvApply').addEventListener('click', csvApply);
+
+/* ---------- the 4-step story (Plant 2 Line 3 only) ---------- */
+// Each step jumps to the moment worth watching, so nobody waits hours of shift time for the first jam.
+var storyPlan = null;
+function labJams(c, seed, upto){ // start times (s) of the labeler's own stops in one shift
+  var li = -1; c.machines.forEach(function(m,i){ if (m.name==='Labeler') li = i; });
+  var sm = new SimCore.Sim(c, seed, false), out = [], seen = 0;
+  while (sm.t < upto && sm.step()){
+    for (; seen < sm.events.length; seen++){ var e = sm.events[seen]; if (e.kind==='m' && e.i===li && e.dur >= 600) out.push(e.t0); }
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+function storyPick(){
+  if (storyPlan) return storyPlan;
+  var byId = {}; T.scenariosFor(L3).forEach(function(s){ byId[s.id] = s.cfg; });
+  for (var seed = 45; seed < 400; seed++){
+    var a = labJams(byId.wk45, seed, 9000);
+    if (a.length < 2 || a[0] < 2700 || a[0] > 9000 || a[1] - a[0] > 7200) continue;
+    var b = labJams(byId.wk45buf, seed, 27000);
+    if (b.length < 2) continue;
+    return storyPlan = { seed: seed, t: { normal: 0, wk45: a[0] - 60, wk45buf: b[1] - 60, wk45fix: a[0] - 60 } };
+  }
+  return storyPlan = { seed: 45, t: {} };
+}
+function storyGo(id){
+  if (!L3) return;
+  if (base !== L3) setLine(L3, id);
+  else scen.forEach(function(s,i){ if (s.id===id) setScenario(i); });
+  var plan = storyPick(), tt = Math.max(0, plan.t[id] || 0);
+  $('seed').value = plan.seed; restart();
+  while (sim.t < tt && sim.step()){}
+  playing = true; dirty = true;
+  var x = id==='normal' ? 60 : 10;
+  speedX = x; Array.prototype.forEach.call($('speedSeg').children, function(b){ b.classList.toggle('on', +b.dataset.x===x); });
+  drawStory();
+  $('lineCard').scrollIntoView({behavior:'smooth', block:'start'});
+}
+function drawStory(){
+  var on = L3 && base === L3, id = on ? scen[scIdx].id : null;
+  $('story').hidden = !on; $('heroCta').querySelector('a.pri').hidden = !on; $('heroVid').hidden = !on; if (!on) $('heroVid').pause();
+  Array.prototype.forEach.call(document.querySelectorAll('.step4'), function(b){ b.classList.toggle('on', b.dataset.sc===id); });
+}
+$('steps').addEventListener('click', function(e){ var b = e.target.closest('.step4'); if (b) storyGo(b.dataset.sc); });
+$('btnCsv2').addEventListener('click', function(){ $('csvDlg').showModal(); });
+/* ---------- skip to the next stop ---------- */
+// The sim is deterministic for a config and seed, so a shadow run finds when the next stop starts.
+function nextStopAt(from){
+  var key = seedVal()+'|'+JSON.stringify(cfg);
+  if (nextStopAt.key !== key){ var sh = new SimCore.Sim(cfg, seedVal(), false); while (sh.step()){} nextStopAt.ev = sh.events.map(function(e){ return e.t0; }).sort(function(a,b){return a-b;}); nextStopAt.key = key; }
+  var ev = nextStopAt.ev; for (var i=0;i<ev.length;i++) if (ev[i] > from + 31) return ev[i];
+  return -1;
+}
+$('btnSkip').addEventListener('click', function(){
+  if (sim.t >= sim.T) restart();
+  var t0 = nextStopAt(sim.t), moved = 0;
+  while (t0 < 0 && moved < 30){ $('seed').value = seedVal()+1; moved++; restart(); t0 = nextStopAt(-31); } // no more stops this shift: go to the next one
+  if (t0 < 0){ toast('This line has no stops set.'); return; }
+  while (sim.t < t0 - 30 && sim.step()){}
+  if (moved) toast('No more stops in that shift, so this is the next shift.');
+  speedX = 10; Array.prototype.forEach.call($('speedSeg').children, function(b){ b.classList.toggle('on', +b.dataset.x===10); });
+  playing = true; dirty = true;
+});
+var rz = 0; window.addEventListener('resize', function(){ clearTimeout(rz); rz = setTimeout(function(){ if (view==='2d' && layout().key !== lay.key) buildLine(); if (v3) v3.resize(); dirty = true; }, 120); });
+window.addEventListener('hashchange', function(){ var h = parseHash(); if (h.c){ try { setCustom(T.decodeShare(h.c), h.sc); } catch(e){} } else if (h.line){ var p = PRE.filter(function(q){return q.id===h.line;})[0]; if (p) setLine(p, h.sc); } if (h.seed){ $('seed').value = h.seed; restart(); } });
+window.__ls = { sim:function(){return sim;}, cfg:function(){return cfg;}, base:function(){return base;}, cmp:function(){return cmp;}, scen:function(){return scen;}, shareUrl:shareUrl, exportJSON:exportJSON, importJSON:importJSON,
+  csvLoad:csvLoad, csv:csv, storyPick:function(){return storyPick();},
+  // for the demo recorder: load a story step without scrolling, then advance the sim by hand, frame by frame
+  story:function(id){ storyGo(id); playing = false; },
+  advance:function(n, dt){ playing = false; for (var i=0;i<n && sim.step();i++){} phase += (dt||1/30)*Math.min(60, 22*Math.sqrt(Math.max(1,n*30)));
+    var now = sim.bottleneckNow(300); if (view==='3d' && v3) v3.update(sim, cfg, {dt:dt||1/30, phase:phase, running:true, now:now}); else drawLine(now); drawKpis(now); drawGantt(); if (window.__runLabel) $('runState').textContent = window.__runLabel; },
+  view:function(){return view;}, v3:function(){return v3;}, setView:setView };
+requestAnimationFrame(frame);
+})();
+</script>

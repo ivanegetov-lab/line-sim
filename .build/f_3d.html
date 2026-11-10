@@ -1,0 +1,281 @@
+
+<!-- 3D view: three.js is the only external script, pinned, loaded only when the 3D view is opened -->
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js"}}</script>
+<script type="module" id="view3dmod">
+const STATE_COL = [0x10B981, 0xF59E0B, 0x3B82F6, 0xEF4444, 0x9CA3AF];
+const STATE_CSS = ['#059669', '#D97706', '#2563EB', '#DC2626', '#6B7280'];
+const STATE_TXT = ['RUNNING', 'STARVED', 'BLOCKED', 'DOWN', 'LINE STOP'];
+const PITCH = 5.2, MWID = 2.2, DECK = 1.0;
+
+window.LineSim3D = {
+  create: async function (host, opts) {
+    const THREE = await import('three');
+    return make(THREE, host, opts || {});
+  }
+};
+
+function make(THREE, host, opts) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const canvas = renderer.domElement;
+  host.insertBefore(canvas, host.firstChild);
+  const labels = document.createElement('div');
+  labels.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden';
+  host.appendChild(labels);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0B1220);
+  scene.fog = new THREE.Fog(0x0B1220, 40, 120);
+  const camera = new THREE.PerspectiveCamera(36, 2, 0.5, 400);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x1b2540, 2.2));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.6); sun.position.set(6, 12, 9); scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xF06050, 0.5); fill.position.set(-8, 4, -6); scene.add(fill);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.MeshBasicMaterial({ color: 0x0D1524 }));
+  floor.rotation.x = -Math.PI / 2; floor.position.y = -0.01; scene.add(floor);
+  const grid = new THREE.GridHelper(240, 120, 0x1E2A44, 0x162036); scene.add(grid);
+
+  const lam = (c, o) => new THREE.MeshLambertMaterial(Object.assign({ color: c, flatShading: true }, o || {}));
+  const MAT = {
+    white: lam(0xF1F5F9), dark: lam(0x1F2937), mid: lam(0x64748B), coral: lam(0xF06050), belt: lam(0x2A3447), rail: lam(0x94A3B8),
+    wood: lam(0xB98A52), card: lam(0xD2A56B), glass: lam(0x9CC3F5, { transparent: true, opacity: 0.28, depthWrite: false }),
+    bottle: lam(0xF8FAFC), pad: new THREE.MeshBasicMaterial({ color: 0x111C30 }), tape: new THREE.MeshBasicMaterial({ color: 0xF06050 })
+  };
+  const glowTex = (function () {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  })();
+
+  let root = null, M = [], C = [], pallet = null, lineLen = 10, centerX = 0, cfgRef = null;
+  const cam = { theta: 0.5, phi: 1.1, radius: 30, sway: 1, t: 0, lastUser: -1e9, target: new THREE.Vector3(0, 1.2, 0) };
+  let W = 0, H = 0, narrow = false, userZoom = 1;
+
+  function box(w, h, d, mat, x, y, z, parent) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); parent.add(m); return m; }
+  function cyl(rt, rb, h, seg, mat, x, y, z, parent) { const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat); m.position.set(x, y, z); parent.add(m); return m; }
+  function kind(name) {
+    const n = name.toLowerCase();
+    if (/pallet|stack|robot/.test(n)) return 'pal';
+    if (/case|carton|pack|wrap|box|bag|tray/.test(n)) return 'pack';
+    if (/label|sleeve|print|cod|mark/.test(n)) return 'label';
+    if (/cap|seam|clos|seal|cork|lid/.test(n)) return 'cap';
+    if (/fill|dos|blow|mix|rins|wash/.test(n)) return 'fill';
+    return 'gen';
+  }
+  function buildMachine(m, i, x) {
+    const g = new THREE.Group(); g.position.x = x; root.add(g);
+    const o = { g: g, spin: [], bob: null, lamps: [], k: kind(m.name), i: i };
+    box(2.5, 0.02, 2.3, MAT.pad, 0, 0.012, 0, g);
+    box(MWID + 0.1, 0.1, 1.9, MAT.dark, 0, 0.05, 0, g);
+    box(MWID, DECK - 0.1, 1.8, MAT.white, 0, 0.1 + (DECK - 0.1) / 2, 0, g);
+    o.band = box(MWID + 0.04, 0.08, 1.84, new THREE.MeshBasicMaterial({ color: STATE_COL[0] }), 0, DECK - 0.1, 0, g);
+    const y = DECK;
+    if (o.k === 'fill') {
+      const s = new THREE.Group(); s.position.y = y; g.add(s); o.spin.push([s, 1.6]);
+      cyl(0.22, 0.22, 1.0, 8, MAT.dark, 0, 0.5, 0, s); cyl(0.8, 0.8, 0.08, 14, MAT.coral, 0, 1.0, 0, s);
+      for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; cyl(0.05, 0.05, 0.42, 6, MAT.white, Math.cos(a) * 0.62, 0.75, Math.sin(a) * 0.62, s); }
+      cyl(0.92, 0.92, 1.15, 14, MAT.glass, 0, y + 0.58, 0, g); cyl(0.95, 0.95, 0.07, 14, MAT.dark, 0, y + 1.19, 0, g);
+    } else if (o.k === 'cap') {
+      const s = new THREE.Group(); s.position.y = y; g.add(s); o.spin.push([s, 2.4]);
+      cyl(0.5, 0.56, 0.55, 10, MAT.dark, 0, 0.55, 0, s);
+      for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; cyl(0.07, 0.07, 0.3, 6, MAT.white, Math.cos(a) * 0.4, 0.2, Math.sin(a) * 0.4, s); }
+      cyl(0.3, 0.3, 0.3, 10, MAT.coral, 0, y + 1.0, 0, g);
+      const chute = box(0.16, 1.0, 0.16, MAT.mid, -0.55, y + 0.9, -0.45, g); chute.rotation.z = 0.5;
+      box(0.5, 0.4, 0.5, MAT.white, -0.85, y + 1.35, -0.45, g);
+    } else if (o.k === 'label') {
+      box(1.5, 0.75, 0.8, MAT.dark, -0.1, y + 0.4, -0.4, g); box(1.52, 0.1, 0.82, MAT.coral, -0.1, y + 0.7, -0.4, g);
+      const r1 = cyl(0.42, 0.42, 0.14, 16, MAT.coral, 0.5, y + 0.55, 0.42, g); r1.rotation.x = Math.PI / 2; o.spin.push([r1, 3, 'y']);
+      const r2 = cyl(0.26, 0.26, 0.14, 12, MAT.white, -0.45, y + 0.42, 0.42, g); r2.rotation.x = Math.PI / 2; o.spin.push([r2, -4, 'y']);
+    } else if (o.k === 'pack') {
+      box(2.0, 1.15, 1.6, MAT.white, 0, y + 0.6, 0, g); box(1.4, 0.55, 0.04, MAT.dark, 0, y + 0.65, 0.81, g);
+      box(1.0, 0.24, 0.8, MAT.coral, 0, y + 1.3, 0, g);
+      o.bob = [box(0.45, 0.34, 0.45, MAT.card, 0.55, y + 1.6, 0, g), y + 1.6, 0.12];
+    } else if (o.k === 'pal') {
+      [[-1, -0.8], [1, -0.8], [-1, 0.8], [1, 0.8]].forEach(p => box(0.12, 2.2, 0.12, MAT.mid, p[0], y + 1.1, p[1], g));
+      box(2.12, 0.12, 0.12, MAT.mid, 0, y + 2.2, -0.8, g); box(2.12, 0.12, 0.12, MAT.mid, 0, y + 2.2, 0.8, g);
+      box(0.12, 0.12, 1.72, MAT.dark, 0, y + 2.2, 0, g);
+      o.bob = [box(0.7, 0.16, 0.7, MAT.coral, 0, y + 1.5, 0, g), y + 1.45, 0.5];
+      box(0.9, 0.4, 0.9, MAT.card, 0, y + 0.2, 0, g);
+    } else {
+      box(1.6, 0.8, 1.2, MAT.dark, 0, y + 0.4, 0, g); box(1.62, 0.1, 1.22, MAT.coral, 0, y + 0.72, 0, g);
+      const f = cyl(0.35, 0.35, 0.12, 6, MAT.white, 0, y + 0.9, 0, g); o.spin.push([f, 3]);
+    }
+    // andon stack: green, blue, amber, red from the bottom
+    const px = 0.92, pz = -0.78;
+    cyl(0.03, 0.03, 1.7, 6, MAT.mid, px, DECK + 0.85, pz, g);
+    [0, 2, 1, 3].forEach((st, k) => {
+      const mat = new THREE.MeshBasicMaterial({ color: STATE_COL[st] });
+      const l = cyl(0.1, 0.1, 0.17, 10, mat, px, DECK + 1.72 + k * 0.19, pz, g); o.lamps[st] = l;
+    });
+    o.glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: STATE_COL[0], blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    o.glow.scale.set(1.5, 1.5, 1); g.add(o.glow);
+    o.el = document.createElement('div'); o.el.className = 'l3'; o.el.innerHTML = '<b></b><span></span>'; labels.appendChild(o.el);
+    o.anchor = new THREE.Vector3(x, DECK + 2.85, 0);
+    o.hit = box(MWID, 3.2, 1.9, new THREE.MeshBasicMaterial({ visible: false }), 0, 1.6, 0, g); o.hit.userData.i = i;
+    return o;
+  }
+  function buildConveyor(i, x0, x1, cap, cases) {
+    const len = x1 - x0, cx = (x0 + x1) / 2, lanes = Math.max(1, Math.min(6, Math.round(Math.sqrt(cap / 25)))), pitch = 0.22;
+    const width = lanes * 0.24 + 0.14, cols = Math.floor((len - 0.1) / pitch);
+    const o = { i: i, x0: x0, x1: x1, lanes: lanes, cols: cols, cases: cases, pitch: pitch };
+    o.beltMat = lam(0x2A3447);
+    box(len, 0.1, width, o.beltMat, cx, DECK - 0.02, 0, root);
+    box(len, 0.1, 0.03, MAT.rail, cx, DECK + 0.07, width / 2, root); box(len, 0.1, 0.03, MAT.rail, cx, DECK + 0.07, -width / 2, root);
+    box(0.08, DECK - 0.07, width * 0.7, MAT.mid, cx - len / 4, (DECK - 0.07) / 2, 0, root); box(0.08, DECK - 0.07, width * 0.7, MAT.mid, cx + len / 4, (DECK - 0.07) / 2, 0, root);
+    const geo = cases ? new THREE.BoxGeometry(0.19, 0.19, 0.19) : new THREE.CylinderGeometry(0.075, 0.085, 0.3, 8);
+    o.h = cases ? 0.19 : 0.3;
+    o.max = lanes * cols + 4;
+    o.mesh = new THREE.InstancedMesh(geo, cases ? MAT.card : MAT.bottle, o.max); o.mesh.count = 0; root.add(o.mesh);
+    o.el = document.createElement('div'); o.el.className = 'l3b'; labels.appendChild(o.el);
+    o.anchor = new THREE.Vector3(cx, DECK + 0.75, 0); o.txt = '';
+    return o;
+  }
+  function dispose() {
+    if (!root) return;
+    root.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    scene.remove(root); labels.innerHTML = ''; root = null;
+  }
+  function rebuild(cfg) {
+    dispose(); cfgRef = cfg;
+    root = new THREE.Group(); scene.add(root);
+    const N = cfg.machines.length; M = []; C = [];
+    const span = (N - 1) * PITCH, xs = cfg.machines.map((m, i) => i * PITCH - span / 2);
+    let cases = /case|box|carton|pack|pallet/i.test(cfg.unit);
+    cfg.machines.forEach((m, i) => {
+      M.push(buildMachine(m, i, xs[i]));
+      if (/case|carton|pack|box|wrap/i.test(m.name)) cases = true;
+      if (i < N - 1) C.push(buildConveyor(i, xs[i] + MWID / 2, xs[i + 1] - MWID / 2, cfg.buffers[i].capacity, cases));
+    });
+    // outfeed pallet
+    const px = xs[N - 1] + 2.5; pallet = { boxes: [], per: Math.max(1, cfg.ideal_rate * 4) };
+    box(0.5, 0.1, 0.4, MAT.belt, xs[N - 1] + 1.35, DECK - 0.02, 0, root);
+    box(1.5, 0.14, 1.2, MAT.wood, px, 0.07, 0, root);
+    for (let l = 0; l < 3; l++) for (let a = 0; a < 3; a++) for (let b = 0; b < 2; b++)
+      pallet.boxes.push(box(0.44, 0.34, 0.52, MAT.card, px - 0.47 + a * 0.47, 0.32 + l * 0.36, -0.28 + b * 0.56, root));
+    lineLen = span + MWID + 3.4; centerX = 0.9;
+    // floor marking under the line
+    const fm = new THREE.Mesh(new THREE.PlaneGeometry(lineLen + 3, 5.2), MAT.pad); fm.rotation.x = -Math.PI / 2; fm.position.set(centerX, 0.004, 0); root.add(fm);
+    [-2.6, 2.6].forEach(z => { const t = new THREE.Mesh(new THREE.PlaneGeometry(lineLen + 3, 0.07), MAT.tape); t.rotation.x = -Math.PI / 2; t.position.set(centerX, 0.008, z); root.add(t); });
+    cam.target.set(centerX, 1.25, 0); userZoom = 1; fit(true);
+  }
+  function fit(reset) {
+    W = host.clientWidth; H = host.clientHeight; if (!W || !H) return;
+    renderer.setSize(W, H, false); camera.aspect = W / H; narrow = W / H < 1.35;
+    if (reset) { const n = M.length; cam.theta = narrow ? 1.0 : Math.max(0.16, 0.28 - Math.max(0, n - 5) * 0.03); cam.phi = narrow ? 1.12 : 1.13; }
+    camera.updateProjectionMatrix();
+  }
+  function radiusFor(theta) {
+    const half = lineLen / 2, hw = half * Math.abs(Math.cos(theta)) + 1.9, tanH = Math.tan(camera.fov * Math.PI / 360) * camera.aspect;
+    const r1 = hw / tanH + half * Math.abs(Math.sin(theta)) * 0.5;        // fit across
+    const r2 = (3.4 + half * Math.abs(Math.sin(theta)) * 0.5) / Math.tan(camera.fov * Math.PI / 360) ; // fit in height
+    return Math.max(r1, r2, 9) * (narrow ? 1.12 : 1.02) * userZoom;
+  }
+  // tiny orbit control: drag to rotate, pinch or ctrl+wheel to zoom, slow sway when left alone
+  const ptr = new Map(); let moved = 0, pinch = 0;
+  canvas.addEventListener('pointerdown', e => { ptr.set(e.pointerId, [e.clientX, e.clientY]); moved = 0; pinch = 0; try { canvas.setPointerCapture(e.pointerId); } catch (x) {} canvas.style.cursor = 'grabbing'; });
+  canvas.addEventListener('pointermove', e => {
+    const p = ptr.get(e.pointerId); if (!p) return;
+    const dx = e.clientX - p[0], dy = e.clientY - p[1]; ptr.set(e.pointerId, [e.clientX, e.clientY]);
+    cam.lastUser = cam.t;
+    if (ptr.size >= 2) {
+      const pts = Array.from(ptr.values()), d = Math.hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]);
+      if (pinch) userZoom = Math.max(0.35, Math.min(2.2, userZoom * pinch / d)); pinch = d; moved = 99; return;
+    }
+    moved += Math.abs(dx) + Math.abs(dy);
+    cam.theta -= dx * 0.006; cam.phi = Math.max(0.35, Math.min(1.45, cam.phi - dy * 0.005));
+  });
+  const up = e => {
+    const had = ptr.delete(e.pointerId); canvas.style.cursor = 'grab'; pinch = 0;
+    if (had && e.type === 'pointerup' && moved < 6 && opts.onPick) {
+      const r = canvas.getBoundingClientRect(), v = new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      const rc = new THREE.Raycaster(); rc.setFromCamera(v, camera);
+      const hit = rc.intersectObjects(M.map(m => m.hit), false)[0]; if (hit) opts.onPick(hit.object.userData.i);
+    }
+  };
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', e => {
+    if (!(e.ctrlKey || e.metaKey) && cam.t - cam.lastUser > 4) return; // do not hijack page scroll
+    e.preventDefault(); userZoom = Math.max(0.35, Math.min(2.2, userZoom * Math.exp(e.deltaY * 0.0012))); cam.lastUser = cam.t;
+  }, { passive: false });
+  if (window.ResizeObserver) new ResizeObserver(() => fit(false)).observe(host);
+
+  const dummy = new THREE.Object3D(), v = new THREE.Vector3();
+  function place(el, anchor, lift) {
+    v.copy(anchor).project(camera);
+    if (v.z > 1 || v.x < -1.15 || v.x > 1.15) { el.style.display = 'none'; return null; }
+    const x = (v.x + 1) / 2 * W, y = (1 - v.y) / 2 * H;
+    el.style.display = ''; el.style.transform = 'translate(-50%,-100%) translate(' + x.toFixed(1) + 'px,' + (y - (lift || 0)).toFixed(1) + 'px)';
+    return [x, y];
+  }
+  // labels: when neighbours get closer than a full label, show name + state dot; closer still, stagger them
+  let tight = 0;
+  function declutter(xs) {
+    let gap = 1e9;
+    for (let i = 1; i < xs.length; i++) if (xs[i] && xs[i - 1]) gap = Math.min(gap, Math.max(Math.abs(xs[i][0] - xs[i - 1][0]), Math.abs(xs[i][1] - xs[i - 1][1]) * 3.2)); // a full label is about 115 x 36 px
+    const mode = gap < (tight >= 2 ? 84 : 76) ? 2 : gap < (tight >= 1 ? 108 : 100) ? 1 : 0; // hysteresis so the sway does not flicker
+    if (mode !== tight) { tight = mode; labels.classList.toggle('l3c', mode > 0); }
+  }
+  function update(sim, cfg, info) {
+    if (!root || host.hidden) return;
+    if (!W || !H) { fit(true); if (!W) return; }
+    const dt = info.dt || 0; cam.t += dt;
+    const idle = cam.t - cam.lastUser > 3 && ptr.size === 0;
+    cam.sway += ((idle ? 1 : 0) - cam.sway) * Math.min(1, dt * 1.5);
+    const th = cam.theta + Math.sin(cam.t * 0.22) * 0.15 * cam.sway, r = radiusFor(th);
+    cam.radius += (r - cam.radius) * Math.min(1, dt * 6 + (cam.radius === 30 ? 1 : 0));
+    camera.position.set(cam.target.x + cam.radius * Math.sin(cam.phi) * Math.sin(th), cam.target.y + cam.radius * Math.cos(cam.phi), cam.target.z + cam.radius * Math.sin(cam.phi) * Math.cos(th));
+    camera.lookAt(cam.target);
+    scene.fog.near = cam.radius * 1.1; scene.fog.far = cam.radius * 3.2;
+    const N = sim.N, live = info.running, lx = [];
+    for (let i = 0; i < N && i < M.length; i++) {
+      const m = M[i], st = sim.t === 0 ? 0 : sim.state[i], on = st === 0 && live;
+      m.band.material.color.setHex(STATE_COL[st]);
+      for (let s = 0; s < 4; s++) m.lamps[s].material.color.setHex(s === Math.min(st, 3) && st !== 4 ? STATE_COL[s] : 0x1E293B);
+      const lamp = m.lamps[Math.min(st, 3)];
+      m.glow.visible = st !== 4; m.glow.position.copy(lamp.position); m.glow.material.color.setHex(STATE_COL[st]);
+      const pulse = st === 3 ? 1.5 + Math.sin(cam.t * 7) * 0.5 : 1.3; m.glow.scale.set(pulse, pulse, 1);
+      if (on) {
+        m.spin.forEach(s => { if (s[2] === 'y') s[0].rotation.y += dt * s[1]; else s[0].rotation.y += dt * s[1]; });
+        if (m.bob) m.bob[0].position.y = m.bob[1] + Math.abs(Math.sin(cam.t * 2.2 + i)) * m.bob[2];
+      }
+      const rate = st >= 3 ? 0 : sim.rateNow(i, 60), bn = info.now && !info.now.line && info.now.idx === i;
+      const txt = (bn ? '◆ ' : '') + cfg.machines[i].name + '|' + STATE_TXT[st] + (st < 3 ? ' · ' + (rate >= 20 ? Math.round(rate) : rate.toFixed(1)) + '/min' : st === 3 ? ' · ' + Math.ceil(sim.downLeft[i] / 60) + ' min' : '') + '|' + st + (bn ? 'b' : '');
+      if (m.txt !== txt) {
+        m.txt = txt; const p = txt.split('|');
+        m.el.firstChild.textContent = p[0]; m.el.firstChild.style.color = bn ? '#F06050' : '#fff';
+        m.el.lastChild.textContent = p[1]; m.el.lastChild.style.background = STATE_CSS[st];
+      }
+      lx.push(place(m.el, m.anchor, tight === 2 && !narrow && i % 2 ? 17 : 0));
+    }
+    declutter(lx);
+    for (let k = 0; k < C.length; k++) {
+      const c = C[k], frac = sim.buf[k] / sim.cap[k], down = sim.convDown === k, slots = c.lanes * c.cols;
+      let filled = sim.buf[k] > 0 ? Math.max(1, Math.round(frac * slots)) : 0, n = 0;
+      if (frac < 0.02 && sim.buf[k] < 4) filled = 0;
+      c.beltMat.color.setHex(down ? 0x7F1D1D : 0x2A3447);
+      const y = DECK + 0.03 + c.h / 2;
+      for (let s = 0; s < filled; s++) {
+        const col = Math.floor(s / c.lanes), lane = s % c.lanes;
+        dummy.position.set(c.x1 - 0.14 - col * c.pitch, y, (lane - (c.lanes - 1) / 2) * 0.24); dummy.updateMatrix(); c.mesh.setMatrixAt(n++, dummy.matrix);
+      }
+      const free = (c.x1 - c.x0) - Math.ceil(filled / c.lanes) * c.pitch - 0.25;
+      const flowing = !down && sim.lineLeft === 0 && sim.state[k] === 0 && sim.t > 0 && sim.t < sim.T;
+      if (flowing && free > 0.4) for (let j = 0; j < 4; j++) {
+        const pos = (info.phase * 0.035 + j * 0.8) % 3.2;
+        if (pos < free) { dummy.position.set(c.x0 + 0.1 + pos, y, ((j % c.lanes) - (c.lanes - 1) / 2) * 0.24); dummy.updateMatrix(); c.mesh.setMatrixAt(n++, dummy.matrix); }
+      }
+      c.mesh.count = n; c.mesh.instanceMatrix.needsUpdate = true;
+      const txt = sim.buf[k].toLocaleString('en-US') + ' / ' + sim.cap[k].toLocaleString('en-US');
+      if (c.txt !== txt) { c.txt = txt; c.el.textContent = txt; }
+      c.el.style.borderColor = down ? '#DC2626' : frac > 0.95 ? '#3B82F6' : 'rgba(255,255,255,.12)';
+      place(c.el, c.anchor);
+    }
+    if (pallet) { const f = (sim.outCount % pallet.per) / pallet.per, show = Math.floor(f * (pallet.boxes.length + 1)); pallet.boxes.forEach((b, i) => { b.visible = i < show; }); }
+    renderer.render(scene, camera);
+  }
+  return { rebuild: rebuild, update: update, resize: () => fit(false), dispose: dispose, camera: cam, info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles }) };
+}
+</script>
+</body>
+</html>
