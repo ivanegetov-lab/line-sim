@@ -59,7 +59,7 @@ function drawChips(){
 function drawHero(){
   var isL3 = L3 && base === L3, U = cfg.unit;
   $('heroEy').textContent = isL3 ? 'Free simulator · runs in your browser' : cfg.machines.map(function(m){return m.name;}).join(' → ');
-  $('heroH1').textContent = isL3 ? 'More conveyor, or fix the jam?' : cfg.name + (cfg.product ? ' · ' + cfg.product : '');
+  $('heroH1').textContent = isL3 ? 'Test the fix before you buy it.' : cfg.name + (cfg.product ? ' · ' + cfg.product : '');
   $('heroSrc').textContent = base.source && base.source.dataset ? 'Data: Plant 2 open dataset (fictional plant) · speeds are design assumptions'
     : base.source && base.source.file ? 'Your own line · stop rates from '+short(String(base.source.file),40)+' · assumptions are listed at the bottom'
     : 'Your own line · stop rates, speeds and buffers as you entered them';
@@ -67,7 +67,7 @@ function drawHero(){
   $('heroP').textContent = base.source && base.source.dataset ? drawHero.p0
     : 'Run a shift on your line with machines that stop as often and for as long as your numbers say. Then change a speed, a buffer or a stop rate and see what it is worth.';
   $('brandRight').textContent = (cfg.name+' · '+(cfg.product? cfg.product+' · ':'')+fmtRate(cfg.ideal_rate)+' '+U+'/min').toUpperCase();
-  document.title = (isL3 ? 'More conveyor, or fix the jam?' : cfg.name) + ' · line simulator';
+  document.title = (isL3 ? 'Test the fix before you buy it' : cfg.name) + ' · line simulator';
   Array.prototype.forEach.call(document.querySelectorAll('.u'), function(e){ e.textContent = U; });
   Array.prototype.forEach.call(document.querySelectorAll('.U'), function(e){ e.textContent = cap1(U); });
   $('shiftLen').textContent = cfg.shift_min;

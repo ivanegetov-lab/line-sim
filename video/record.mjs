@@ -58,15 +58,15 @@ await p.evaluate(() => {
   document.body.appendChild(el(`<div id="cap"><div class="brand"><i></i>LINE SIMULATOR · FREE TOOL</div><span class="stepn" id="sn">Plant 2 · Line 3</span><h1 id="h1"></h1><p id="pp"></p></div>`));
   const lc = document.getElementById('lineCard');
   const res = el(`<div id="res"><div class="t">Good bottles per shift · 200 simulated shifts</div>
-    <div class="row" data-r="0"><b>1 · Normal week</b><div class="tr"><div class="f" style="background:#64748B"></div></div><div class="v">33,090</div></div>
-    <div class="row" data-r="1"><b>2 · Labeler jams</b><div class="tr"><div class="f" style="background:#DC2626"></div></div><div class="v">−2,416</div></div>
-    <div class="row" data-r="2"><b>3 · + 10× conveyor</b><div class="tr"><div class="f" style="background:#D97706"></div></div><div class="v">27%<small>of loss back</small></div></div>
-    <div class="row" data-r="3"><b>4 · Fix the labels</b><div class="tr"><div class="f" style="background:#059669"></div></div><div class="v">100%<small>of loss back</small></div></div></div>`);
+    <div class="row" data-r="0"><b>Normal week</b><div class="tr"><div class="f" style="background:#64748B"></div></div><div class="v">33,090</div></div>
+    <div class="row" data-r="1"><b>With the jams</b><div class="tr"><div class="f" style="background:#DC2626"></div></div><div class="v">−2,416</div></div>
+    <div class="row" data-r="2"><b>+ 10× conveyor</b><div class="tr"><div class="f" style="background:#D97706"></div></div><div class="v">27%<small>of loss back</small></div></div>
+    <div class="row" data-r="3"><b>Fix the labels</b><div class="tr"><div class="f" style="background:#059669"></div></div><div class="v">100%<small>of loss back</small></div></div></div>`);
   document.body.appendChild(res);
   document.body.appendChild(el(`<div id="foot"><span><b>Free</b> · runs in your browser · Plant 2 open dataset</span><span class="u">Simulate your own line →</span></div>`));
-  document.body.appendChild(el(`<div id="end"><h2>More conveyor buys time.<br><em>It doesn't stop the jams.</em></h2>
-    <p>Run the same test on your own line. Free, in your browser.</p>
-    <div class="cta">Try the free line simulator</div><div class="url">ivanegetov-lab.github.io/line-sim</div></div>`));
+  document.body.appendChild(el(`<div id="end"><h2>Test the fix<br><em>before you buy it.</em></h2>
+    <p>Free line simulator. Put in your own line and your own downtime log. Runs in your browser.</p>
+    <div class="cta">Try it free</div><div class="url">ivanegetov-lab.github.io/line-sim</div></div>`));
   window.__rec = {
     cap(step, h, ptxt){ document.getElementById('sn').textContent = step; document.getElementById('h1').innerHTML = h; document.getElementById('pp').innerHTML = ptxt || ''; },
     bar(r, frac){ const row = document.querySelector(`#res .row[data-r="${r}"]`); row.classList.add('on'); row.querySelector('.f').style.width = (frac * 100) + '%'; },
@@ -85,33 +85,25 @@ const ease = x => 1 - Math.pow(1 - Math.min(1, x), 3);
 const MAX = 33090 * 1.03, frac = v => v / MAX;
 const go = async id => { await p.evaluate(id => __ls.story(id), id); await p.evaluate(() => window.scrollTo(0, 0)); };
 
-// scene 0 + 1: the question, then a normal week
-await go('normal');
-// a normal-week shift with no stops in the first two hours, so 'it all flows' is what you see
-await p.evaluate(() => { const c = __ls.cfg(); let seed = 1; for (; seed < 500; seed++) { const s = new SimCore.Sim(c, seed, false); while (s.t < 7200 && s.step()) {} if (!s.events.length) break; }
-  const el = document.getElementById('seed'); el.value = seed; el.dispatchEvent(new Event('change')); });
-await p.evaluate(() => __ls.advance(1800, 1 / 30));
-await cap('Packaging line · 110 bottles a minute', 'More conveyor, or fix the jam?', 'A labeler starts jamming. Let’s run both fixes.');
-await run(3.2, 2);
-await cap('Step 1 of 4', 'Normal week: it all flows.', 'Green = running.');
-await run(3.2, 8, async x => bar(0, ease(x * 1.6) * frac(33090)));
-// scene 2: week 45 jam
+// scene 1: the hook, on the real line, just before the labeler jams
 await go('wk45');
-await cap('Step 2 of 4', 'The labeler jams.', 'Red = down.');
-await run(1.6, x => 2 + x * 4);
-await cap('Step 2 of 4', 'Everything before it stops.', 'Blue = blocked. <b style="color:#fff">−2,416 bottles a shift.</b>');
-await run(4.4, x => 6 + x * 14, async x => bar(1, (33090 - 2416 * ease(x * 1.5)) / MAX));
-// scene 3: big buffer
+await bar(0, frac(33090));
+await cap('Plant 2 · Line 3 · 110 bottles a minute', 'This line loses 2,416 bottles every shift.', 'The labeler keeps jamming. The fix on the table: buy more conveyor. Let’s test it first.');
+await run(3.8, 0.5);
+// scene 2: the jam
+await cap('The problem', 'One jam stops the whole line.', 'The labeler goes red. The conveyor in front of it fills. Then the capper and filler stop.');
+await run(5.0, x => 2 + x * 14, async x => bar(1, (33090 - 2416 * ease(x * 1.5)) / MAX));
+// scene 3: option 1, buy conveyor
 await go('wk45buf');
-await cap('Step 3 of 4 · fix A', 'Add 10× more conveyor.', 'Room for 2,000 bottles in front of the labeler.');
-await run(1.8, 3);
-await cap('Step 3 of 4 · fix A', 'It fills up. Then it stops too.', '<b style="color:#fff">Only 27% of the loss comes back.</b>');
+await cap('Option 1 · buy conveyor', '10× more conveyor before the labeler.', 'Room for 2,000 bottles instead of 200.');
+await run(2.0, 3);
+await cap('Option 1 · buy conveyor', 'Still full when the next jam hits.', 'It drains too slowly between jams. <b style="color:#fff">Only 27% of the loss comes back.</b>');
 await run(4.8, x => 4 + x * 16, async x => bar(2, (30674 + 664 * ease(x * 1.5)) / MAX));
-// scene 4: fix
+// scene 4: option 2, fix the cause
 await go('wk45fix');
-await cap('Step 4 of 4 · fix B', 'Fix the labels.', '<b style="color:#fff">100% of the loss comes back.</b>');
+await cap('Option 2 · fix the cause', 'Fix the label stock instead.', 'No new equipment. <b style="color:#fff">100% of the loss comes back.</b>');
 await run(4.2, x => 6 + x * 14, async x => bar(3, (30674 + 2416 * ease(x * 1.5)) / MAX));
-await run(1.0, 20);
+await run(0.8, 20);
 // end card
 for (let k = 0; k < 12; k++) { await p.evaluate(o => __rec.end(o), (k + 1) / 12); await snap(); }
 for (let k = 0; k < FPS * 3.6; k++) await snap();
