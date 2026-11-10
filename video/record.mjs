@@ -75,10 +75,10 @@ await p.evaluate(() => {
   };
 });
 
-let fi = 0;
+let fi = 0; const cardH = new Set();
 const cdp = await p.createCDPSession();
 const snap = async () => { const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 92 }); fs.writeFileSync(path.join(frames, String(fi++).padStart(5, '0') + '.jpg'), Buffer.from(data, 'base64')); };
-const run = async (sec, simPerFrame, onFrame) => { const n = Math.round(sec * FPS); for (let k = 0; k < n; k++) { const sp = typeof simPerFrame === 'function' ? simPerFrame(k / n) : simPerFrame; await p.evaluate((s) => __ls.advance(s, 1 / 30), Math.round(sp)); if (onFrame) await onFrame(k / n); await snap(); } };
+const run = async (sec, simPerFrame, onFrame) => { const n = Math.round(sec * FPS); for (let k = 0; k < n; k++) { const sp = typeof simPerFrame === 'function' ? simPerFrame(k / n) : simPerFrame; await p.evaluate((s) => __ls.advance(s, 1 / 30), Math.round(sp)); if (onFrame) await onFrame(k / n); await snap(); cardH.add(await p.evaluate(() => Math.round(document.getElementById('lineCard').getBoundingClientRect().height))); } };
 const cap = (s, h, t) => p.evaluate((s, h, t) => __rec.cap(s, h, t), s, h, t);
 const bar = (r, f) => p.evaluate((r, f) => __rec.bar(r, f), r, f);
 const ease = x => 1 - Math.pow(1 - Math.min(1, x), 3);
@@ -117,6 +117,7 @@ for (let k = 0; k < 12; k++) { await p.evaluate(o => __rec.end(o), (k + 1) / 12)
 for (let k = 0; k < FPS * 3.6; k++) await snap();
 await b.close();
 if (errs.length) console.log('page errors:', errs);
+console.log('line card heights seen:', [...cardH].join(', '));
 console.log(fi, 'frames,', (fi / FPS).toFixed(1), 's');
 
 const mp4 = path.join(dir, 'line-sim-demo.mp4'), gif = path.join(dir, 'line-sim-demo.gif');
