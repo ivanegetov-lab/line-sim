@@ -321,7 +321,7 @@ function parseHash(){ var o = {}; location.hash.replace(/^#/, '').split('&').for
   if (qs.get('t')){ var tt = Math.min(sim.T, parseFloat(qs.get('t'))*60); while (sim.t < tt && sim.step()){} playing = qs.get('play')==='1'; }
   var pref = qs.get('view') || store.get('linesim.view');
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  document.addEventListener('DOMContentLoaded', function(){ if (pref==='3d' || (!pref && !reduce && hasWebGL() && window.LineSim3D)) setView('3d', true); });
+  document.addEventListener('DOMContentLoaded', function(){ if (pref==='3d') setView('3d', true); });
 })();
 $('lineSel').addEventListener('change', function(){ var v = this.value; setLine(v==='custom' ? custom : PRE.filter(function(p){return p.id===v;})[0]); });
 $('scChips').addEventListener('click', function(e){ var i = e.target.dataset && e.target.dataset.i; if (i!=null) setScenario(+i); });
