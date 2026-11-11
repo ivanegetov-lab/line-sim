@@ -163,14 +163,16 @@ await R('cap', '200 simulated shifts each:<br>more conveyor 27% back, the fix 10
 const cmpArea = await p.evaluate(() => { const r = __R.union(__R.rect('#cmpCard .sh'), __R.rect('#cmpRows')); r.w *= 0.66; return r; });
 await camTo(cmpArea, 1.5, 30, 20);
 await hold(3.4, 30);
-await R('cap', 'Test the fix before you buy it.');
-await p.evaluate(() => { document.querySelector('#botb').innerHTML = '<i></i>Free line simulator<span>· ivanegetov-lab.github.io/line-sim</span>'; });
+// LinkedIn cut (FOR=linkedin) points to the comments; the page/README cut shows the URL
+const LI = process.env.FOR === 'linkedin';
+await R('cap', LI ? 'Free simulator + Claude skill.<br>Try it on your own line.' : 'Test the fix before you buy it.');
+await p.evaluate(LI => { document.querySelector('#botb').innerHTML = LI ? '<i></i>Free download<span>· link in the comments</span>' : '<i></i>Free line simulator<span>· ivanegetov-lab.github.io/line-sim</span>'; }, LI);
 await hold(2.6, 30);
 await b.close();
 if (errs.length) console.log('page errors:', errs);
 console.log(fi, 'frames,', (fi / FPS).toFixed(1), 's');
 
-const mp4 = path.join(dir, 'line-sim-demo.mp4'), gif = path.join(dir, 'line-sim-demo.gif');
+const mp4 = path.join(dir, LI ? 'line-sim-linkedin.mp4' : 'line-sim-demo.mp4'), gif = path.join(dir, LI ? 'line-sim-linkedin.gif' : 'line-sim-demo.gif');
 execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(FPS), '-i', path.join(frames, '%05d.jpg'), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', '-preset', 'slow', '-movflags', '+faststart', mp4]);
 const gf = path.join(dir, '.gif'); fs.rmSync(gf, { recursive: true, force: true }); fs.mkdirSync(gf);
 execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', mp4, '-vf', 'fps=12,scale=540:-1:flags=lanczos', path.join(gf, '%04d.png')]);
