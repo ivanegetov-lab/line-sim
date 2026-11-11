@@ -4,7 +4,7 @@
 
 A labeler starts jamming and the line loses 2,400 bottles a shift. Do you add more conveyor, or fix the jam? Watch what each fix gets back, then run the same test on your own line.
 
-![25-second demo: the labeler jams and the line stops; 10× more conveyor gets back 27% of the loss; fixing the label stock gets back 100%](video/line-sim-demo.gif)
+![35-second screen recording of the simulator: the labeler jams and the line stops; 10× more conveyor gets back 27% of the loss; fixing the label stock gets back 100%](video/line-sim-demo.gif)
 
 The [MP4 version](video/line-sim-demo.mp4) (1080×1350, for LinkedIn) is recorded from the real page by `node video/record.mjs`.
 

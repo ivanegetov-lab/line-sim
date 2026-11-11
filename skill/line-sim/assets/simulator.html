@@ -1691,8 +1691,9 @@ window.__ls = { sim:function(){return sim;}, cfg:function(){return cfg;}, base:f
   csvLoad:csvLoad, csv:csv, storyPick:function(){return storyPick();},
   // for the demo recorder: load a story step without scrolling, then advance the sim by hand, frame by frame
   story:function(id){ storyGo(id); playing = false; },
+  hold:function(){ playing = false; },
   advance:function(n, dt){ playing = false; for (var i=0;i<n && sim.step();i++){} phase += (dt||1/30)*Math.min(60, 22*Math.sqrt(Math.max(1,n*30)));
-    var now = sim.bottleneckNow(300); if (view==='3d' && v3) v3.update(sim, cfg, {dt:dt||1/30, phase:phase, running:true, now:now}); else drawLine(now); drawKpis(now); drawGantt(); if (window.__runLabel) $('runState').textContent = window.__runLabel; },
+    var now = sim.bottleneckNow(300); if (view==='3d' && v3) v3.update(sim, cfg, {dt:dt||1/30, phase:phase, running:true, now:now}); else drawLine(now); drawKpis(now); drawGantt(); if (window.__runLabel){ $('runState').textContent = window.__runLabel; $('btnPlay').textContent = 'Pause'; } },
   view:function(){return view;}, v3:function(){return v3;}, setView:setView };
 requestAnimationFrame(frame);
 })();
