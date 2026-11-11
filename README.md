@@ -1,4 +1,4 @@
-# Test the fix before you buy it: a free line simulator
+# Line simulator: simulate your production line with a free Claude skill
 
 **[▶ Try it live](https://ivanegetov-lab.github.io/line-sim/)**: free, runs in your browser, nothing to install, nothing uploaded.
 

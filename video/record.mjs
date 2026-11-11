@@ -125,9 +125,12 @@ const near = (sel, text) => p.evaluate((sel, text) => { let e = document.querySe
 cam = await R('fit', lineArea, TOP, BOT, W, H, 18); await R('set', cam);
 await R('cur', 900, 1150);
 
+// 0. what this is
+await R('cap', 'I built a Claude skill that simulates<br>your production line.');
+await hold(2.6, 6);
 // 1. the problem: the whole line, then in close
-await R('cap', 'Line 3 loses 2,416 bottles a shift<br>to a jamming labeler.');
-await hold(1.4, 6);
+await R('cap', 'Test case: Line 3 loses 2,416 bottles<br>a shift to a jamming labeler.');
+await hold(1.2, 6);
 await camTo(first3, 1.1, 6, 20);
 await hold(0.8, 6);
 // click "Skip to next stop" with the camera following the cursor
@@ -165,7 +168,7 @@ await camTo(cmpArea, 1.5, 30, 20);
 await hold(3.4, 30);
 // LinkedIn cut (FOR=linkedin) points to the comments; the page/README cut shows the URL
 const LI = process.env.FOR === 'linkedin';
-await R('cap', LI ? 'Free simulator + Claude skill.<br>Try it on your own line.' : 'Test the fix before you buy it.');
+await R('cap', 'Free simulator + Claude skill.<br>Download it and try it on your line.');
 await p.evaluate(LI => { document.querySelector('#botb').innerHTML = LI ? '<i></i>Free download<span>· link in the comments</span>' : '<i></i>Free line simulator<span>· ivanegetov-lab.github.io/line-sim</span>'; }, LI);
 await hold(2.6, 30);
 await b.close();
